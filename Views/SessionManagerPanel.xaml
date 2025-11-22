@@ -1,0 +1,49 @@
+<UserControl x:Class="TabbySSH.Views.SessionManagerPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="450" d:DesignWidth="250">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="Saved Sessions" FontSize="14" FontWeight="Bold" 
+                   Margin="5" Padding="5"/>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="5,0,5,5">
+            <Button Content="New Session" x:Name="NewSessionButton" 
+                    Click="NewSessionButton_Click" Padding="5,2" Margin="0,0,5,0"/>
+            <Button Content="New Group" x:Name="NewFolderButton" 
+                    Click="NewFolderButton_Click" Padding="5,2"/>
+        </StackPanel>
+
+        <TreeView x:Name="SessionsTreeView" Grid.Row="2" 
+                  MouseDoubleClick="SessionsTreeView_MouseDoubleClick"
+                  KeyDown="SessionsTreeView_KeyDown"
+                  SelectedItemChanged="SessionsTreeView_SelectedItemChanged"
+                  PreviewMouseMove="SessionsTreeView_PreviewMouseMove"
+                  PreviewMouseLeftButtonDown="SessionsTreeView_PreviewMouseLeftButtonDown"
+                  PreviewMouseRightButtonDown="SessionsTreeView_PreviewMouseRightButtonDown"
+                  DragOver="SessionsTreeView_DragOver"
+                  Drop="SessionsTreeView_Drop"
+                  AllowDrop="True">
+            <TreeView.ContextMenu>
+                <ContextMenu x:Name="ItemContextMenu">
+                    <MenuItem Header="Connect" x:Name="ConnectMenuItem" Click="ConnectMenuItem_Click"/>
+                    <MenuItem Header="Edit" x:Name="EditMenuItem" Click="EditMenuItem_Click"/>
+                    <MenuItem Header="Duplicate" x:Name="DuplicateMenuItem" Click="DuplicateMenuItem_Click"/>
+                    <Separator/>
+                    <MenuItem Header="Move To" x:Name="MoveToMenuItem"/>
+                    <Separator/>
+                    <MenuItem Header="Delete" x:Name="DeleteMenuItem" Click="DeleteMenuItem_Click"/>
+                </ContextMenu>
+            </TreeView.ContextMenu>
+        </TreeView>
+    </Grid>
+</UserControl>
+

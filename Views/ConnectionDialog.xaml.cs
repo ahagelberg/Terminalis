@@ -1,0 +1,524 @@
+using System.Collections.ObjectModel;
+using System.Globalization;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Input;
+using System.Windows.Media;
+using Microsoft.Win32;
+using TabbySSH.Models;
+using TabbySSH.Views;
+
+namespace TabbySSH.Views;
+
+public class BoolToIntConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        if (value is bool boolValue)
+        {
+            return boolValue ? 0 : 1;
+        }
+        return 0;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        if (value is int intValue)
+        {
+            return intValue == 0;
+        }
+        return true;
+    }
+}
+
+public partial class ConnectionDialog : Window
+{
+    public SshSessionConfiguration? Configuration { get; private set; }
+    public bool IsLiveEditMode { get; private set; }
+
+    public ConnectionDialog()
+    {
+        InitializeComponent();
+        PortForwardingDataGrid.ItemsSource = new ObservableCollection<PortForwardingRule>();
+        PasswordAuthRadio_Checked(null, null);
+        NameTextBox.Focus();
+        
+        _selectedForegroundColor = null;
+        _selectedBackgroundColor = null;
+        _selectedAccentColor = null;
+        
+        Loaded += (s, e) =>
+        {
+            UpdateColorBoxes();
+        };
+    }
+
+    public ConnectionDialog(SshSessionConfiguration existingConfig, bool liveEditMode = false) : this()
+    {
+        NameTextBox.Text = existingConfig.Name;
+        HostTextBox.Text = existingConfig.Host;
+        PortTextBox.Text = existingConfig.Port.ToString();
+        UsernameTextBox.Text = existingConfig.Username;
+        PasswordBox.Password = existingConfig.Password ?? string.Empty;
+        PrivateKeyPathTextBox.Text = existingConfig.PrivateKeyPath ?? string.Empty;
+        PrivateKeyPassphraseBox.Password = existingConfig.PrivateKeyPassphrase ?? string.Empty;
+        PasswordAuthRadio.IsChecked = existingConfig.UsePasswordAuthentication;
+        KeyAuthRadio.IsChecked = !existingConfig.UsePasswordAuthentication;
+        
+        KeepAliveTextBox.Text = existingConfig.KeepAliveInterval.ToString();
+        TimeoutTextBox.Text = existingConfig.ConnectionTimeout.ToString();
+        CompressionCheckBox.IsChecked = existingConfig.CompressionEnabled;
+        X11ForwardingCheckBox.IsChecked = existingConfig.X11ForwardingEnabled;
+        
+        BellNotificationComboBox.SelectedIndex = existingConfig.BellNotification switch
+        {
+            "Flash" => 0,
+            "Sound" => 1,
+            "None" => 2,
+            _ => 0
+        };
+        
+        TerminalResizeMethodComboBox.SelectedIndex = existingConfig.TerminalResizeMethod switch
+        {
+            "SSH" => 0,
+            "ANSI" => 1,
+            "STTY" => 2,
+            "XTERM" => 3,
+            "NONE" => 4,
+            _ => 0
+        };
+        
+        _selectedAccentColor = existingConfig.Color;
+        
+        FontFamilyComboBox.Text = existingConfig.FontFamily;
+        FontSizeTextBox.Text = existingConfig.FontSize.ToString();
+        
+        _selectedForegroundColor = existingConfig.ForegroundColor;
+        _selectedBackgroundColor = existingConfig.BackgroundColor;
+        UpdateColorBoxes();
+        
+        var normalizedLineEnding = ConvertLineEndingString(existingConfig.LineEnding);
+        LineEndingComboBox.SelectedIndex = normalizedLineEnding switch
+        {
+            "\n" => 0,
+            "\r\n" => 1,
+            _ => 0
+        };
+        
+        if (existingConfig.PortForwardingRules != null && existingConfig.PortForwardingRules.Count > 0)
+        {
+            var collection = PortForwardingDataGrid.ItemsSource as ObservableCollection<PortForwardingRule>;
+            collection?.Clear();
+            foreach (var rule in existingConfig.PortForwardingRules)
+            {
+                collection?.Add(rule);
+            }
+        }
+        
+        PasswordAuthRadio_Checked(null, null);
+        Title = liveEditMode ? "Edit Session Settings" : "Edit Session";
+        _existingConfig = existingConfig;
+        IsLiveEditMode = liveEditMode;
+        
+        if (liveEditMode)
+        {
+            HideConnectionFields();
+        }
+    }
+    
+    private void HideConnectionFields()
+    {
+        var connectionGroupBox = FindName("ConnectionGroupBox") as GroupBox;
+        if (connectionGroupBox != null)
+        {
+            connectionGroupBox.Visibility = Visibility.Collapsed;
+        }
+        
+        var authenticationGroupBox = FindName("AuthenticationGroupBox") as GroupBox;
+        if (authenticationGroupBox != null)
+        {
+            authenticationGroupBox.Visibility = Visibility.Collapsed;
+        }
+        
+        var connectionOptionsGroupBox = FindName("ConnectionOptionsGroupBox") as GroupBox;
+        if (connectionOptionsGroupBox != null)
+        {
+            var keepAliveGrid = FindName("KeepAliveGrid") as Grid;
+            if (keepAliveGrid != null) keepAliveGrid.Visibility = Visibility.Collapsed;
+            
+            var timeoutGrid = FindName("TimeoutGrid") as Grid;
+            if (timeoutGrid != null) timeoutGrid.Visibility = Visibility.Collapsed;
+            
+            var compressionCheckBox = FindName("CompressionCheckBox") as CheckBox;
+            if (compressionCheckBox != null) compressionCheckBox.Visibility = Visibility.Collapsed;
+        }
+        
+        var forwardingGroupBox = FindName("ForwardingGroupBox") as GroupBox;
+        if (forwardingGroupBox != null)
+        {
+            forwardingGroupBox.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private SshSessionConfiguration? _existingConfig;
+    private string? _selectedForegroundColor;
+    private string? _selectedBackgroundColor;
+    private string? _selectedAccentColor;
+
+    private void PasswordAuthRadio_Checked(object? sender, RoutedEventArgs? e)
+    {
+        if (PasswordGrid != null)
+        {
+            PasswordGrid.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void KeyAuthRadio_Checked(object? sender, RoutedEventArgs? e)
+    {
+        if (PasswordGrid != null)
+        {
+            PasswordGrid.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void BrowseKeyButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Filter = "Private Key Files (*.pem;*.key;*.ppk)|*.pem;*.key;*.ppk|All Files (*.*)|*.*",
+            Title = "Select Private Key File"
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            PrivateKeyPathTextBox.Text = dialog.FileName;
+        }
+    }
+
+    private void AddLocalForwardButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (PortForwardingDataGrid.ItemsSource is ObservableCollection<PortForwardingRule> collection)
+        {
+            collection.Add(new PortForwardingRule
+            {
+                Name = $"Local Forward {collection.Count + 1}",
+                IsLocal = true,
+                Enabled = true
+            });
+        }
+    }
+
+    private void AddRemoteForwardButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (PortForwardingDataGrid.ItemsSource is ObservableCollection<PortForwardingRule> collection)
+        {
+            collection.Add(new PortForwardingRule
+            {
+                Name = $"Remote Forward {collection.Count + 1}",
+                IsLocal = false,
+                Enabled = true
+            });
+        }
+    }
+
+    private void TypeComboBox_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is ComboBox comboBox && comboBox.DataContext is PortForwardingRule rule)
+        {
+            comboBox.SelectedIndex = rule.IsLocal ? 0 : 1;
+        }
+    }
+
+    private void TypeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox comboBox && comboBox.DataContext is PortForwardingRule rule)
+        {
+            rule.IsLocal = comboBox.SelectedIndex == 0;
+        }
+    }
+
+    private void ConnectButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(HostTextBox.Text))
+        {
+            MessageBox.Show("Host is required.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+            HostTextBox.Focus();
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(UsernameTextBox.Text))
+        {
+            MessageBox.Show("Username is required.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+            UsernameTextBox.Focus();
+            return;
+        }
+
+        if (!int.TryParse(PortTextBox.Text, out int port))
+        {
+            port = 22;
+        }
+
+        if (KeyAuthRadio.IsChecked == true && string.IsNullOrWhiteSpace(PrivateKeyPathTextBox.Text))
+        {
+            MessageBox.Show("Private key file is required when using key authentication.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+            PrivateKeyPathTextBox.Focus();
+            return;
+        }
+
+        if (KeyAuthRadio.IsChecked == true && !File.Exists(PrivateKeyPathTextBox.Text))
+        {
+            MessageBox.Show("Private key file does not exist.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+            PrivateKeyPathTextBox.Focus();
+            return;
+        }
+
+        if (!int.TryParse(KeepAliveTextBox.Text, out int keepAlive) || keepAlive < 0)
+        {
+            keepAlive = 30;
+        }
+
+        if (!int.TryParse(TimeoutTextBox.Text, out int timeout) || timeout < 0)
+        {
+            timeout = 30;
+        }
+
+        var sessionName = NameTextBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(sessionName))
+        {
+            sessionName = $"{UsernameTextBox.Text}@{HostTextBox.Text}";
+        }
+
+        var portForwardingRules = new List<PortForwardingRule>();
+        if (PortForwardingDataGrid.ItemsSource is ObservableCollection<PortForwardingRule> collection)
+        {
+            portForwardingRules.AddRange(collection);
+        }
+
+        Configuration = new SshSessionConfiguration
+        {
+            Host = HostTextBox.Text,
+            Port = port,
+            Username = UsernameTextBox.Text,
+            Password = PasswordBox.Password,
+            Name = sessionName,
+            UsePasswordAuthentication = PasswordAuthRadio.IsChecked == true,
+            PrivateKeyPath = KeyAuthRadio.IsChecked == true ? PrivateKeyPathTextBox.Text : null,
+            PrivateKeyPassphrase = KeyAuthRadio.IsChecked == true ? PrivateKeyPassphraseBox.Password : null,
+            KeepAliveInterval = keepAlive,
+            ConnectionTimeout = timeout,
+            CompressionEnabled = CompressionCheckBox.IsChecked == true,
+            X11ForwardingEnabled = X11ForwardingCheckBox.IsChecked == true,
+            BellNotification = BellNotificationComboBox.SelectedIndex switch
+            {
+                0 => "Flash",
+                1 => "Sound",
+                2 => "None",
+                _ => "Flash"
+            },
+            TerminalResizeMethod = TerminalResizeMethodComboBox.SelectedItem is ComboBoxItem resizeItem && resizeItem.Tag is string resizeTag ? resizeTag : "SSH",
+            Color = _selectedAccentColor,
+            LineEnding = ConvertLineEndingString(LineEndingComboBox.SelectedItem is ComboBoxItem item && item.Tag is string tag ? tag : "\n"),
+            Encoding = _existingConfig?.Encoding ?? "UTF-8",
+            PortForwardingRules = portForwardingRules,
+            FontFamily = string.IsNullOrWhiteSpace(FontFamilyComboBox.Text) ? "Consolas" : FontFamilyComboBox.Text,
+                FontSize = double.TryParse(FontSizeTextBox.Text, out double fontSize) && fontSize > 0 ? fontSize : 12.0,
+            ForegroundColor = _selectedForegroundColor,
+            BackgroundColor = _selectedBackgroundColor
+        };
+
+        DialogResult = true;
+        Close();
+    }
+
+    private void CancelButton_Click(object sender, RoutedEventArgs e)
+    {
+        DialogResult = false;
+        Close();
+    }
+
+    private void FontSizeUpButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (double.TryParse(FontSizeTextBox.Text, out double size))
+        {
+            size = Math.Min(size + 1, 72);
+            FontSizeTextBox.Text = size.ToString();
+        }
+        else
+        {
+            FontSizeTextBox.Text = "12";
+        }
+    }
+
+    private void FontSizeDownButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (double.TryParse(FontSizeTextBox.Text, out double size))
+        {
+            size = Math.Max(size - 1, 6);
+            FontSizeTextBox.Text = size.ToString();
+        }
+        else
+        {
+            FontSizeTextBox.Text = "12";
+        }
+    }
+
+    private void FontFamilyComboBox_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is ComboBox comboBox && !comboBox.IsDropDownOpen)
+        {
+            comboBox.IsDropDownOpen = true;
+            e.Handled = true;
+        }
+    }
+
+    private void ForegroundColorBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var dialog = new ColorPickerDialog(_selectedForegroundColor)
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            _selectedForegroundColor = dialog.SelectedColor;
+            UpdateColorBoxes();
+        }
+    }
+
+    private void BackgroundColorBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var dialog = new ColorPickerDialog(_selectedBackgroundColor)
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            _selectedBackgroundColor = dialog.SelectedColor;
+            UpdateColorBoxes();
+        }
+    }
+
+    private void ForegroundColorDefaultButton_Click(object sender, RoutedEventArgs e)
+    {
+        _selectedForegroundColor = null;
+        UpdateColorBoxes();
+    }
+
+    private void BackgroundColorDefaultButton_Click(object sender, RoutedEventArgs e)
+    {
+        _selectedBackgroundColor = null;
+        UpdateColorBoxes();
+    }
+
+    private void UpdateColorBoxes()
+    {
+        if (ForegroundColorBox != null)
+        {
+            if (string.IsNullOrEmpty(_selectedForegroundColor))
+            {
+                ForegroundColorBox.Background = new SolidColorBrush(Colors.LightGray);
+            }
+            else
+            {
+                try
+                {
+                    var brush = new BrushConverter().ConvertFromString(_selectedForegroundColor) as SolidColorBrush;
+                    ForegroundColorBox.Background = brush ?? new SolidColorBrush(Colors.LightGray);
+                }
+                catch
+                {
+                    ForegroundColorBox.Background = new SolidColorBrush(Colors.LightGray);
+                }
+            }
+        }
+
+        if (BackgroundColorBox != null)
+        {
+            if (string.IsNullOrEmpty(_selectedBackgroundColor))
+            {
+                BackgroundColorBox.Background = new SolidColorBrush(Colors.Black);
+            }
+            else
+            {
+                try
+                {
+                    var brush = new BrushConverter().ConvertFromString(_selectedBackgroundColor) as SolidColorBrush;
+                    BackgroundColorBox.Background = brush ?? new SolidColorBrush(Colors.Black);
+                }
+                catch
+                {
+                    BackgroundColorBox.Background = new SolidColorBrush(Colors.Black);
+                }
+            }
+        }
+
+        if (AccentColorBox != null)
+        {
+            if (string.IsNullOrEmpty(_selectedAccentColor))
+            {
+                AccentColorBox.Background = Brushes.Transparent;
+            }
+            else
+            {
+                try
+                {
+                    var brush = new BrushConverter().ConvertFromString(_selectedAccentColor) as SolidColorBrush;
+                    AccentColorBox.Background = brush ?? Brushes.Transparent;
+                }
+                catch
+                {
+                    AccentColorBox.Background = Brushes.Transparent;
+                }
+            }
+        }
+    }
+
+    private void AccentColorBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var dialog = new ColorPickerDialog(_selectedAccentColor)
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            _selectedAccentColor = dialog.SelectedColor;
+            UpdateColorBoxes();
+        }
+    }
+
+    private void AccentColorDefaultButton_Click(object sender, RoutedEventArgs e)
+    {
+        _selectedAccentColor = null;
+        UpdateColorBoxes();
+    }
+
+    private static string ConvertLineEndingString(string lineEnding)
+    {
+        if (string.IsNullOrEmpty(lineEnding))
+        {
+            return "\n";
+        }
+
+        if (lineEnding == "\\n" || lineEnding == @"\n")
+        {
+            return "\n";
+        }
+
+        if (lineEnding == "\\r\\n" || lineEnding == @"\r\n")
+        {
+            return "\r\n";
+        }
+
+        if (lineEnding == "\n" || lineEnding == "\r\n")
+        {
+            return lineEnding;
+        }
+
+        return "\n";
+    }
+}
+
