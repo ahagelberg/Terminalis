@@ -4,8 +4,12 @@
         Title="About TabbySSH" Height="300" Width="400"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
-        ShowInTaskbar="False">
-    <Grid Margin="20">
+        ShowInTaskbar="False"
+        Background="{DynamicResource WindowBackground}">
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="32" ResizeBorderThickness="4" GlassFrameThickness="0"/>
+    </WindowChrome.WindowChrome>
+    <Grid Margin="20" Background="{DynamicResource WindowBackground}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -21,7 +25,8 @@
                    FontSize="24" 
                    FontWeight="Bold" 
                    HorizontalAlignment="Center" 
-                   Margin="0,0,0,10"/>
+                   Margin="0,0,0,10"
+                   Foreground="{DynamicResource WindowForeground}"/>
         
         <TextBlock Grid.Row="1" 
                    Text="{Binding Description}" 
@@ -29,26 +34,29 @@
                    HorizontalAlignment="Center" 
                    Margin="0,0,0,20"
                    TextWrapping="Wrap"
-                   TextAlignment="Center"/>
+                   TextAlignment="Center"
+                   Foreground="{DynamicResource WindowForeground}"/>
         
         <TextBlock Grid.Row="2" 
                    Text="{Binding VersionText}" 
                    FontSize="11" 
                    HorizontalAlignment="Center" 
-                   Margin="0,0,0,10"/>
+                   Margin="0,0,0,10"
+                   Foreground="{DynamicResource WindowForeground}"/>
         
         <TextBlock Grid.Row="3" 
                    Text="{Binding CreatorText}" 
                    FontSize="11" 
                    HorizontalAlignment="Center" 
-                   Margin="0,0,0,10"/>
+                   Margin="0,0,0,10"
+                   Foreground="{DynamicResource WindowForeground}"/>
         
         <TextBlock Grid.Row="4" 
                    Text="{Binding CopyrightText}" 
                    FontSize="10" 
                    HorizontalAlignment="Center" 
                    Margin="0,0,0,20"
-                   Foreground="Gray"/>
+                   Foreground="{DynamicResource BorderColorDark}"/>
         
         <Button Grid.Row="6" 
                 Content="OK" 
@@ -56,7 +64,9 @@
                 Height="25" 
                 HorizontalAlignment="Center"
                 Click="OkButton_Click"
-                IsDefault="True"/>
+                IsDefault="True"
+                Background="{DynamicResource ButtonBackground}" Foreground="{DynamicResource ButtonForeground}"
+                BorderBrush="{DynamicResource ButtonBorder}"/>
     </Grid>
 </Window>
 

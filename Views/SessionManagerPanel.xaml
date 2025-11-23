@@ -5,7 +5,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              mc:Ignorable="d"
              d:DesignHeight="450" d:DesignWidth="250">
-    <Grid>
+    <Grid Background="{DynamicResource PanelBackground}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -13,16 +13,20 @@
         </Grid.RowDefinitions>
 
         <TextBlock Grid.Row="0" Text="Saved Sessions" FontSize="14" FontWeight="Bold" 
-                   Margin="5" Padding="5"/>
+                   Margin="5" Padding="5" Foreground="{DynamicResource PanelForeground}"/>
 
         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="5,0,5,5">
             <Button Content="New Session" x:Name="NewSessionButton" 
-                    Click="NewSessionButton_Click" Padding="5,2" Margin="0,0,5,0"/>
+                    Click="NewSessionButton_Click" Padding="5,2" Margin="0,0,5,0"
+                    Background="{DynamicResource ButtonBackground}" Foreground="{DynamicResource ButtonForeground}"
+                    BorderBrush="{DynamicResource ButtonBorder}"/>
             <Button Content="New Group" x:Name="NewFolderButton" 
-                    Click="NewFolderButton_Click" Padding="5,2"/>
+                    Click="NewFolderButton_Click" Padding="5,2"
+                    Background="{DynamicResource ButtonBackground}" Foreground="{DynamicResource ButtonForeground}"
+                    BorderBrush="{DynamicResource ButtonBorder}"/>
         </StackPanel>
 
-        <TreeView x:Name="SessionsTreeView" Grid.Row="2" 
+        <TreeView x:Name="SessionsTreeView" Grid.Row="2" Background="{DynamicResource TreeViewBackground}" Foreground="{DynamicResource TreeViewForeground}" 
                   MouseDoubleClick="SessionsTreeView_MouseDoubleClick"
                   KeyDown="SessionsTreeView_KeyDown"
                   SelectedItemChanged="SessionsTreeView_SelectedItemChanged"

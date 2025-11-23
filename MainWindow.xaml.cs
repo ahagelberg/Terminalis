@@ -1,10 +1,13 @@
-﻿using System.ComponentModel;
+﻿using System;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Markup;
 using TabbySSH.Models;
 using TabbySSH.Services;
 using TabbySSH.Services.Connections;
@@ -19,6 +22,11 @@ public partial class MainWindow : Window
     private readonly ConfigurationManager _configManager;
     private readonly SessionManager _sessionManager;
     private ApplicationSettings _appSettings;
+    private bool _isDragging = false;
+    private Point _dragStartPoint;
+    private Point _windowStartPoint;
+    private Adorner? _tabDropIndicator;
+    private TerminalTabItem? _draggedTab;
 
     public MainWindow()
     {
@@ -27,16 +35,38 @@ public partial class MainWindow : Window
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         
+        VersionRun.Text = VersionInfo.Version;
+        
         _configManager = new ConfigurationManager();
         _sessionManager = new SessionManager(_configManager);
         
         _appSettings = LoadApplicationSettings();
         
+        if (!string.IsNullOrEmpty(_appSettings.Theme))
+        {
+            App.ThemeManager.LoadTheme(_appSettings.Theme);
+        }
+        
+        App.ThemeManager.ThemeChanged += ThemeManager_ThemeChanged;
+        TerminalTabs.SelectionChanged += TerminalTabs_SelectionChanged;
+        
+        UpdateTitleBarColor();
+        
         SessionManagerPanel.SetSessionManager(_sessionManager);
         SessionManagerPanel.SessionSelected += SessionManagerPanel_SessionSelected;
         SessionManagerPanel.SessionEditRequested += SessionManagerPanel_SessionEditRequested;
         
+        StateChanged += MainWindow_StateChanged;
+        
         LoadWindowState();
+    }
+
+    private void MainWindow_StateChanged(object? sender, EventArgs e)
+    {
+        if (MaximizeButton != null)
+        {
+            MaximizeButton.Content = WindowState == System.Windows.WindowState.Maximized ? "2" : "1";
+        }
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -133,6 +163,8 @@ public partial class MainWindow : Window
                 await CreateNewTab(sshConfig);
             }
         }
+        
+        UpdateTitleBarColor();
     }
 
     private void OptionsMenuItem_Click(object sender, RoutedEventArgs e)
@@ -146,6 +178,13 @@ public partial class MainWindow : Window
         {
             _appSettings = dialog.Settings;
             SaveApplicationSettings();
+            
+            if (!string.IsNullOrEmpty(_appSettings.Theme))
+            {
+                App.ThemeManager.LoadTheme(_appSettings.Theme);
+            }
+            
+            UpdateTitleBarColor();
         }
     }
 
@@ -184,7 +223,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void NewTabMenuItem_Click(object sender, RoutedEventArgs e)
+    internal async void NewTabMenuItem_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new ConnectionDialog
         {
@@ -264,6 +303,8 @@ public partial class MainWindow : Window
             TerminalTabs.SelectedItem = tab;
 
             tab.AttachConnection(connection, config.Color, config);
+            
+            UpdateTitleBarColor();
 
             var connected = await connection.ConnectAsync();
 
@@ -288,7 +329,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void CloseTabMenuItem_Click(object sender, RoutedEventArgs e)
+    internal async void CloseTabMenuItem_Click(object sender, RoutedEventArgs e)
     {
         if (TerminalTabs.SelectedItem is TerminalTabItem tab)
         {
@@ -362,6 +403,201 @@ public partial class MainWindow : Window
         {
             StatusTextBlock.Text = "Ready";
         }
+        
+        UpdateTitleBarColor();
+    }
+    
+    private void UpdateTitleBarColor()
+    {
+        TitleBarBorder.Background = Application.Current.Resources["MenuBackground"] as SolidColorBrush;
+        
+        if (!_appSettings.UseAccentColorForTitleBar)
+        {
+            TitleBarAccentOverlay.Background = Brushes.Transparent;
+            return;
+        }
+        
+        if (TerminalTabs.SelectedItem is TerminalTabItem selectedTab && !string.IsNullOrEmpty(selectedTab.ConnectionColor))
+        {
+            try
+            {
+                var brush = new BrushConverter().ConvertFromString(selectedTab.ConnectionColor) as SolidColorBrush;
+                if (brush != null)
+                {
+                    TitleBarAccentOverlay.Background = brush;
+                    return;
+                }
+            }
+            catch
+            {
+            }
+        }
+        
+        TitleBarAccentOverlay.Background = Brushes.Transparent;
+    }
+
+    private void TerminalTabs_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(typeof(TerminalTabItem)) is TerminalTabItem draggedTab)
+        {
+            _draggedTab = draggedTab;
+            e.Effects = DragDropEffects.Move;
+            e.Handled = true;
+
+            var tabControl = sender as TabControl;
+            if (tabControl == null) return;
+
+            var position = e.GetPosition(tabControl);
+            var targetTab = GetTabItemAtPosition(tabControl, position);
+
+            if (targetTab != null && targetTab != draggedTab)
+            {
+                ShowDropIndicator(tabControl, targetTab, e.GetPosition(tabControl));
+            }
+            else
+            {
+                HideDropIndicator();
+            }
+        }
+    }
+
+    private void TerminalTabs_Drop(object sender, DragEventArgs e)
+    {
+        HideDropIndicator();
+
+        if (e.Data.GetData(typeof(TerminalTabItem)) is TerminalTabItem draggedTab)
+        {
+            var tabControl = sender as TabControl;
+            if (tabControl == null) return;
+
+            var position = e.GetPosition(tabControl);
+            var targetTab = GetTabItemAtPosition(tabControl, position);
+
+            if (targetTab != null && targetTab != draggedTab)
+            {
+                var draggedIndex = tabControl.Items.IndexOf(draggedTab);
+                var targetIndex = tabControl.Items.IndexOf(targetTab);
+
+                if (draggedIndex >= 0 && targetIndex >= 0)
+                {
+                    var targetPoint = targetTab.TranslatePoint(new Point(0, 0), tabControl);
+                    var targetSize = targetTab.RenderSize;
+                    var isLeft = position.X < targetPoint.X + targetSize.Width / 2;
+
+                    tabControl.Items.RemoveAt(draggedIndex);
+                    var newIndex = isLeft ? targetIndex : targetIndex + 1;
+                    if (draggedIndex < targetIndex)
+                    {
+                        newIndex = isLeft ? targetIndex - 1 : targetIndex;
+                    }
+                    tabControl.Items.Insert(newIndex, draggedTab);
+                    tabControl.SelectedItem = draggedTab;
+                }
+            }
+        }
+
+        _draggedTab = null;
+        e.Handled = true;
+    }
+
+    private void TerminalTabs_DragLeave(object sender, DragEventArgs e)
+    {
+        HideDropIndicator();
+    }
+
+    private TabItem? GetTabItemAtPosition(TabControl tabControl, Point position)
+    {
+        var hitTestResult = VisualTreeHelper.HitTest(tabControl, position);
+        if (hitTestResult == null) return null;
+
+        var current = hitTestResult.VisualHit;
+        while (current != null && current != tabControl)
+        {
+            if (current is TabItem tabItem && tabControl.Items.Contains(tabItem))
+            {
+                return tabItem;
+            }
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return null;
+    }
+
+    private class TabDropIndicatorAdorner : Adorner
+    {
+        private readonly double _x;
+        private readonly double _y;
+
+        public TabDropIndicatorAdorner(UIElement adornedElement, double x, double y) : base(adornedElement)
+        {
+            _x = x;
+            _y = y;
+            IsHitTestVisible = false;
+        }
+
+        protected override void OnRender(DrawingContext drawingContext)
+        {
+            var indicatorColor = Application.Current.Resources["DropIndicatorColor"] as SolidColorBrush;
+            if (indicatorColor == null)
+            {
+                indicatorColor = Application.Current.Resources["BorderColorDark"] as SolidColorBrush;
+            }
+            if (indicatorColor == null)
+            {
+                indicatorColor = new SolidColorBrush(Colors.Gray);
+            }
+
+            var pen = new Pen(indicatorColor, 2);
+            drawingContext.DrawLine(pen, new Point(_x, _y), new Point(_x, _y + 20));
+        }
+    }
+
+    private void ShowDropIndicator(TabControl tabControl, TabItem targetTab, Point position)
+    {
+        HideDropIndicator();
+
+        var tabPanel = FindVisualChild<System.Windows.Controls.Primitives.TabPanel>(tabControl);
+        if (tabPanel == null) return;
+
+        var targetBounds = targetTab.TransformToAncestor(tabControl).TransformBounds(new Rect(0, 0, targetTab.ActualWidth, targetTab.ActualHeight));
+        var isLeft = position.X < targetBounds.Left + targetBounds.Width / 2;
+
+        var indicatorX = isLeft ? targetBounds.Left - 1 : targetBounds.Right + 1;
+        var indicatorY = targetBounds.Top + (targetBounds.Height - 20) / 2;
+
+        var adornerLayer = AdornerLayer.GetAdornerLayer(tabControl);
+        if (adornerLayer != null)
+        {
+            _tabDropIndicator = new TabDropIndicatorAdorner(tabControl, indicatorX, indicatorY);
+            adornerLayer.Add(_tabDropIndicator);
+        }
+    }
+
+    private void HideDropIndicator()
+    {
+        if (_tabDropIndicator != null)
+        {
+            var adornerLayer = AdornerLayer.GetAdornerLayer(TerminalTabs);
+            adornerLayer?.Remove(_tabDropIndicator);
+            _tabDropIndicator = null;
+        }
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T result)
+            {
+                return result;
+            }
+            var childOfChild = FindVisualChild<T>(child);
+            if (childOfChild != null)
+            {
+                return childOfChild;
+            }
+        }
+        return null;
     }
 
     private void OnErrorOccurred(object? sender, string error)
@@ -380,6 +616,8 @@ public partial class MainWindow : Window
             connection.ErrorOccurred += OnErrorOccurred;
 
             tab.AttachConnection(connection, config.Color, config);
+            
+            UpdateTitleBarColor();
 
             var connected = await connection.ConnectAsync();
 
@@ -391,7 +629,7 @@ public partial class MainWindow : Window
             }
             else
             {
-                Dispatcher.BeginInvoke(new Action(() =>
+                _ = Dispatcher.BeginInvoke(new Action(() =>
                 {
                     tab.UpdateStatusIndicator(ConnectionStatus.Error);
                 }));
@@ -401,12 +639,177 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            Dispatcher.BeginInvoke(new Action(() =>
+            _ = Dispatcher.BeginInvoke(new Action(() =>
             {
                 tab.UpdateStatusIndicator(ConnectionStatus.Error);
             }));
             StatusTextBlock.Text = $"Reconnection error: {ex.Message}";
             ShowNotification($"Reconnection error: {ex.Message}", NotificationType.Error);
+        }
+    }
+
+    private void ThemeManager_ThemeChanged(object? sender, Models.Theme theme)
+    {
+        UpdateTitleBarColor();
+    }
+
+    private void TitleBar_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_isDragging)
+        {
+            return;
+        }
+
+        var source = e.OriginalSource as DependencyObject;
+        if (source == null)
+        {
+            return;
+        }
+
+        var current = source;
+        while (current != null)
+        {
+            if (current is Button || current is MenuItem || current is Menu)
+            {
+                return;
+            }
+
+            if (current == sender)
+            {
+                if (e.ClickCount == 2)
+                {
+                    WindowState = WindowState == System.Windows.WindowState.Maximized 
+                        ? System.Windows.WindowState.Normal 
+                        : System.Windows.WindowState.Maximized;
+                    e.Handled = true;
+                }
+                else
+                {
+                    _isDragging = true;
+                    _dragStartPoint = PointToScreen(e.GetPosition(this));
+                    _windowStartPoint = new Point(Left, Top);
+                    CaptureMouse();
+                    e.Handled = true;
+                }
+                return;
+            }
+
+            DependencyObject? parent = null;
+            try
+            {
+                parent = VisualTreeHelper.GetParent(current);
+            }
+            catch
+            {
+                try
+                {
+                    parent = LogicalTreeHelper.GetParent(current);
+                }
+                catch
+                {
+                    break;
+                }
+            }
+
+            if (parent == null)
+            {
+                break;
+            }
+
+            current = parent;
+        }
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        if (_isDragging && e.LeftButton == MouseButtonState.Pressed)
+        {
+            var currentScreenPos = PointToScreen(e.GetPosition(this));
+            var diff = currentScreenPos - _dragStartPoint;
+            
+            Left = _windowStartPoint.X + diff.X;
+            Top = _windowStartPoint.Y + diff.Y;
+        }
+        else if (_isDragging && e.LeftButton == MouseButtonState.Released)
+        {
+            _isDragging = false;
+            ReleaseMouseCapture();
+        }
+        
+        base.OnMouseMove(e);
+    }
+
+    protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonUp(e);
+        
+        if (_isDragging)
+        {
+            _isDragging = false;
+            ReleaseMouseCapture();
+        }
+    }
+
+    private void MinimizeButton_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = System.Windows.WindowState.Minimized;
+    }
+
+    private void MaximizeButton_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState == System.Windows.WindowState.Maximized 
+            ? System.Windows.WindowState.Normal 
+            : System.Windows.WindowState.Maximized;
+    }
+
+    private void CloseButton_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+    }
+
+    private void WindowButton_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            var hoverColor = Application.Current.Resources["MenuHoverBackground"] as SolidColorBrush;
+            if (hoverColor != null)
+            {
+                button.Background = hoverColor;
+            }
+            else
+            {
+                button.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3FFFFFFF")!);
+            }
+        }
+    }
+
+    private void WindowButton_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            button.Background = Brushes.Transparent;
+        }
+    }
+
+    private void CloseButton_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            button.Background = new SolidColorBrush(Colors.Red);
+            button.Foreground = new SolidColorBrush(Colors.White);
+        }
+    }
+
+    private void CloseButton_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            button.Background = Brushes.Transparent;
+            var menuForeground = Application.Current.Resources["MenuForeground"] as SolidColorBrush;
+            if (menuForeground != null)
+            {
+                button.Foreground = menuForeground;
+            }
         }
     }
 

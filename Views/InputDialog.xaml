@@ -6,8 +6,12 @@
         mc:Ignorable="d"
         Title="Input" Height="150" Width="350"
         WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize">
-    <Grid Margin="15">
+        ResizeMode="NoResize"
+        Background="{DynamicResource WindowBackground}">
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="32" ResizeBorderThickness="4" GlassFrameThickness="0"/>
+    </WindowChrome.WindowChrome>
+    <Grid Margin="15" Background="{DynamicResource WindowBackground}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -15,7 +19,7 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" x:Name="PromptTextBlock" Text="Enter value:" Margin="0,0,0,10"/>
+        <TextBlock Grid.Row="0" x:Name="PromptTextBlock" Text="Enter value:" Margin="0,0,0,10" Foreground="{DynamicResource WindowForeground}"/>
 
         <TextBox Grid.Row="1" x:Name="InputTextBox" Margin="0,0,0,15" 
                  KeyDown="InputTextBox_KeyDown"/>
@@ -27,9 +31,13 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <Button Grid.Column="1" Content="OK" x:Name="OkButton" 
-                    Click="OkButton_Click" Padding="15,5" Margin="0,0,10,0" IsDefault="True"/>
+                    Click="OkButton_Click" Padding="15,5" Margin="0,0,10,0" IsDefault="True"
+                    Background="{DynamicResource ButtonBackground}" Foreground="{DynamicResource ButtonForeground}"
+                    BorderBrush="{DynamicResource ButtonBorder}"/>
             <Button Grid.Column="2" Content="Cancel" x:Name="CancelButton" 
-                    Click="CancelButton_Click" Padding="15,5" IsCancel="True"/>
+                    Click="CancelButton_Click" Padding="15,5" IsCancel="True"
+                    Background="{DynamicResource ButtonBackground}" Foreground="{DynamicResource ButtonForeground}"
+                    BorderBrush="{DynamicResource ButtonBorder}"/>
         </Grid>
     </Grid>
 </Window>

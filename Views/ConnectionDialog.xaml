@@ -8,19 +8,48 @@
         mc:Ignorable="d"
         Title="Session Configuration" Height="600" Width="700"
         WindowStartupLocation="CenterOwner"
-        ResizeMode="CanResize">
+        ResizeMode="CanResize"
+        Background="{DynamicResource WindowBackground}">
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="0" ResizeBorderThickness="4" GlassFrameThickness="0"/>
+    </WindowChrome.WindowChrome>
     <Window.Resources>
         <views:BoolToIntConverter x:Key="BoolToIntConverter"/>
         <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
     </Window.Resources>
-    <Grid Margin="15">
+    <Border BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" Background="{DynamicResource WindowBackground}">
+        <Grid Background="{DynamicResource WindowBackground}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" Text="Session Configuration" FontSize="16" FontWeight="Bold" Margin="0,0,0,15"/>
+        <Border Grid.Row="0" 
+                Background="{DynamicResource TitleBarBackground}" 
+                PreviewMouseLeftButtonDown="TitleBar_PreviewMouseLeftButtonDown"
+                Height="32">
+            <Grid VerticalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="Session Configuration" FontSize="14" FontWeight="Bold" Margin="15,0,0,0" Foreground="{DynamicResource TitleBarForeground}" VerticalAlignment="Center"/>
+                <Button Grid.Column="1" x:Name="CloseButton" Content="r" Width="46" Height="32"
+                        Click="CloseButton_Click"
+                        Background="Transparent" BorderThickness="0"
+                        Foreground="{DynamicResource TitleBarForeground}"
+                        FontFamily="Marlett" FontSize="12"
+                        Cursor="Hand"
+                        MouseEnter="CloseButton_MouseEnter" MouseLeave="CloseButton_MouseLeave"/>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="15" Background="{DynamicResource WindowBackground}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
@@ -48,7 +77,17 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Port:" VerticalAlignment="Center"/>
-                    <TextBox Grid.Column="1" x:Name="PortTextBox" Margin="10,0,0,0" Text="22"/>
+                    <Grid Grid.Column="1" Margin="10,0,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox Grid.Column="0" x:Name="PortTextBox" Text="22" VerticalContentAlignment="Center" Padding="5,0" Width="50" TextAlignment="Right"/>
+                        <StackPanel Grid.Column="1" Orientation="Vertical" VerticalAlignment="Stretch">
+                            <RepeatButton x:Name="PortUpButton" Content="▲" Width="20" Height="12" FontSize="8" Padding="0" Click="PortUpButton_Click" VerticalAlignment="Top"/>
+                            <RepeatButton x:Name="PortDownButton" Content="▼" Width="20" Height="12" FontSize="8" Padding="0" Click="PortDownButton_Click" VerticalAlignment="Bottom"/>
+                        </StackPanel>
+                    </Grid>
                 </Grid>
             </StackPanel>
         </GroupBox>
@@ -102,7 +141,7 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Font Family:" VerticalAlignment="Center"/>
-                    <ComboBox Grid.Column="1" x:Name="FontFamilyComboBox" Margin="10,0,0,0" IsEditable="True" PreviewMouseDown="FontFamilyComboBox_PreviewMouseDown">
+                    <ComboBox Grid.Column="1" x:Name="FontFamilyComboBox" Margin="10,0,0,0" IsEditable="False">
                         <ComboBoxItem Content="Consolas"/>
                         <ComboBoxItem Content="Courier New"/>
                         <ComboBoxItem Content="Lucida Console"/>
@@ -119,10 +158,10 @@
                     <TextBlock Grid.Column="0" Text="Font Size:" VerticalAlignment="Center"/>
                     <Grid Grid.Column="1" Margin="10,0,0,0">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox Grid.Column="0" x:Name="FontSizeTextBox" Text="12" VerticalContentAlignment="Center" Padding="5,0"/>
+                        <TextBox Grid.Column="0" x:Name="FontSizeTextBox" Text="12" VerticalContentAlignment="Center" Padding="5,0" Width="50" TextAlignment="Right"/>
                         <StackPanel Grid.Column="1" Orientation="Vertical" VerticalAlignment="Stretch">
                             <RepeatButton x:Name="FontSizeUpButton" Content="▲" Width="20" Height="12" FontSize="8" Padding="0" Click="FontSizeUpButton_Click" VerticalAlignment="Top"/>
                             <RepeatButton x:Name="FontSizeDownButton" Content="▼" Width="20" Height="12" FontSize="8" Padding="0" Click="FontSizeDownButton_Click" VerticalAlignment="Bottom"/>
@@ -138,12 +177,14 @@
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0" VerticalAlignment="Center">
                         <Border x:Name="ForegroundColorBox" 
                                 Width="50" Height="25" 
-                                BorderBrush="Gray" BorderThickness="1" 
+                                BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" 
                                 Background="LightGray" 
                                 Cursor="Hand" 
                                 MouseLeftButtonDown="ForegroundColorBox_MouseLeftButtonDown"
                                 VerticalAlignment="Center"/>
-                        <Button Content="(Default)" Margin="10,0,0,0" Padding="5,2" Click="ForegroundColorDefaultButton_Click" VerticalAlignment="Center"/>
+                        <Button Content="(Default)" Margin="10,0,0,0" Padding="5,2" Click="ForegroundColorDefaultButton_Click" VerticalAlignment="Center"
+                                Background="{DynamicResource ButtonBackground}" Foreground="{DynamicResource ButtonForeground}"
+                                BorderBrush="{DynamicResource ButtonBorder}"/>
                     </StackPanel>
                 </Grid>
                 <Grid Margin="0,5">
@@ -155,12 +196,14 @@
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0" VerticalAlignment="Center">
                         <Border x:Name="BackgroundColorBox" 
                                 Width="50" Height="25" 
-                                BorderBrush="Gray" BorderThickness="1" 
+                                BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" 
                                 Background="Black" 
                                 Cursor="Hand" 
                                 MouseLeftButtonDown="BackgroundColorBox_MouseLeftButtonDown"
                                 VerticalAlignment="Center"/>
-                        <Button Content="(Default)" Margin="10,0,0,0" Padding="5,2" Click="BackgroundColorDefaultButton_Click" VerticalAlignment="Center"/>
+                        <Button Content="(Default)" Margin="10,0,0,0" Padding="5,2" Click="BackgroundColorDefaultButton_Click" VerticalAlignment="Center"
+                                Background="{DynamicResource ButtonBackground}" Foreground="{DynamicResource ButtonForeground}"
+                                BorderBrush="{DynamicResource ButtonBorder}"/>
                     </StackPanel>
                 </Grid>
                 <Grid Margin="0,5">
@@ -172,12 +215,14 @@
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0" VerticalAlignment="Center">
                         <Border x:Name="AccentColorBox" 
                                 Width="50" Height="25" 
-                                BorderBrush="Gray" BorderThickness="1" 
+                                BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" 
                                 Background="Transparent" 
                                 Cursor="Hand" 
                                 MouseLeftButtonDown="AccentColorBox_MouseLeftButtonDown"
                                 VerticalAlignment="Center"/>
-                        <Button Content="(Default)" Margin="10,0,0,0" Padding="5,2" Click="AccentColorDefaultButton_Click" VerticalAlignment="Center"/>
+                        <Button Content="(Default)" Margin="10,0,0,0" Padding="5,2" Click="AccentColorDefaultButton_Click" VerticalAlignment="Center"
+                                Background="{DynamicResource ButtonBackground}" Foreground="{DynamicResource ButtonForeground}"
+                                BorderBrush="{DynamicResource ButtonBorder}"/>
                     </StackPanel>
                 </Grid>
             </StackPanel>
@@ -191,7 +236,17 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Keep-Alive (sec):" VerticalAlignment="Center"/>
-                    <TextBox Grid.Column="1" x:Name="KeepAliveTextBox" Margin="10,0,0,0" Text="30"/>
+                    <Grid Grid.Column="1" Margin="10,0,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox Grid.Column="0" x:Name="KeepAliveTextBox" Text="30" VerticalContentAlignment="Center" Padding="5,0" Width="50" TextAlignment="Right"/>
+                        <StackPanel Grid.Column="1" Orientation="Vertical" VerticalAlignment="Stretch">
+                            <RepeatButton x:Name="KeepAliveUpButton" Content="▲" Width="20" Height="12" FontSize="8" Padding="0" Click="KeepAliveUpButton_Click" VerticalAlignment="Top"/>
+                            <RepeatButton x:Name="KeepAliveDownButton" Content="▼" Width="20" Height="12" FontSize="8" Padding="0" Click="KeepAliveDownButton_Click" VerticalAlignment="Bottom"/>
+                        </StackPanel>
+                    </Grid>
                 </Grid>
                 <Grid Margin="0,5">
                     <Grid.ColumnDefinitions>
@@ -199,7 +254,17 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Timeout (sec):" VerticalAlignment="Center"/>
-                    <TextBox Grid.Column="1" x:Name="TimeoutTextBox" Margin="10,0,0,0" Text="30"/>
+                    <Grid Grid.Column="1" Margin="10,0,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox Grid.Column="0" x:Name="TimeoutTextBox" Text="30" VerticalContentAlignment="Center" Padding="5,0" Width="50" TextAlignment="Right"/>
+                        <StackPanel Grid.Column="1" Orientation="Vertical" VerticalAlignment="Stretch">
+                            <RepeatButton x:Name="TimeoutUpButton" Content="▲" Width="20" Height="12" FontSize="8" Padding="0" Click="TimeoutUpButton_Click" VerticalAlignment="Top"/>
+                            <RepeatButton x:Name="TimeoutDownButton" Content="▼" Width="20" Height="12" FontSize="8" Padding="0" Click="TimeoutDownButton_Click" VerticalAlignment="Bottom"/>
+                        </StackPanel>
+                    </Grid>
                 </Grid>
                 <CheckBox x:Name="CompressionCheckBox" Content="Enable Compression" Margin="0,5" IsChecked="True"/>
                 <Grid Margin="0,5">
@@ -219,8 +284,9 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Bell Notification:" VerticalAlignment="Center"/>
-                    <ComboBox Grid.Column="1" x:Name="BellNotificationComboBox" Margin="10,0,0,0" SelectedIndex="0">
+                    <ComboBox Grid.Column="1" x:Name="BellNotificationComboBox" Margin="10,0,0,0" SelectedIndex="1">
                         <ComboBoxItem Content="Flash"/>
+                        <ComboBoxItem Content="Line Flash"/>
                         <ComboBoxItem Content="Sound"/>
                         <ComboBoxItem Content="None"/>
                     </ComboBox>
@@ -248,7 +314,7 @@
                 <TextBlock Text="Port Forwarding" FontWeight="Bold" Margin="0,15,0,5"/>
                 <DataGrid x:Name="PortForwardingDataGrid" AutoGenerateColumns="False" CanUserAddRows="True" CanUserDeleteRows="True" Height="150" Margin="0,5">
                     <DataGrid.Columns>
-                        <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="60"/>
+                        <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="60" ElementStyle="{StaticResource DataGridCheckBoxStyle}" EditingElementStyle="{StaticResource DataGridCheckBoxStyle}"/>
                         <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="120"/>
                         <DataGridTemplateColumn Header="Type" Width="80">
                             <DataGridTemplateColumn.CellTemplate>
@@ -280,17 +346,23 @@
             </StackPanel>
         </ScrollViewer>
 
-        <Grid Grid.Row="2" Margin="0,10,0,0">
+        </Grid>
+        <Grid Grid.Row="2" Margin="15,10,15,15">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <Button Grid.Column="1" Content="OK" x:Name="ConnectButton" 
-                    Click="ConnectButton_Click" Padding="15,5" Margin="0,0,10,0" IsDefault="True"/>
+            <Button Grid.Column="1" Content="Save" x:Name="ConnectButton" 
+                    Click="ConnectButton_Click" Padding="15,5" Margin="0,0,10,0" IsDefault="True"
+                    Background="{DynamicResource ButtonBackground}" Foreground="{DynamicResource ButtonForeground}"
+                    BorderBrush="{DynamicResource ButtonBorder}"/>
             <Button Grid.Column="2" Content="Cancel" x:Name="CancelButton" 
-                    Click="CancelButton_Click" Padding="15,5" IsCancel="True"/>
+                    Click="CancelButton_Click" Padding="15,5" IsCancel="True"
+                    Background="{DynamicResource ButtonBackground}" Foreground="{DynamicResource ButtonForeground}"
+                    BorderBrush="{DynamicResource ButtonBorder}"/>
         </Grid>
     </Grid>
+    </Border>
 </Window>
 

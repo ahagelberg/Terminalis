@@ -11,27 +11,37 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="TabItem">
                         <Border x:Name="Border" 
-                                Background="{TemplateBinding Background}"
+                                Background="{DynamicResource TabBackground}"
                                 BorderBrush="Transparent"
                                 BorderThickness="1,1,1,0"
-                                Margin="0,0,-4,0"
+                                Margin="0,0,2,0"
                                 CornerRadius="4,4,0,0"
                                 Padding="0">
-                            <ContentPresenter x:Name="ContentSite"
-                                              VerticalAlignment="Center"
-                                              HorizontalAlignment="Stretch"
-                                              ContentSource="Header"
-                                              Margin="12,2,2,2"
-                                              RecognizesAccessKey="True"/>
+                            <Grid>
+                                <Border x:Name="AccentOverlay" Background="{TemplateBinding Background}" Opacity="0.25" CornerRadius="4,4,0,0"/>
+                                <ContentPresenter x:Name="ContentSite"
+                                                  VerticalAlignment="Center"
+                                                  HorizontalAlignment="Stretch"
+                                                  ContentSource="Header"
+                                                  Margin="12,2,2,2"
+                                                  RecognizesAccessKey="True"/>
+                            </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="Border" Property="Panel.ZIndex" Value="100"/>
-                                <Setter TargetName="Border" Property="BorderBrush" Value="#999999"/>
+                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource TabSelectedBackground}"/>
+                                <Setter TargetName="Border" Property="BorderBrush" Value="{DynamicResource TabForeground}"/>
+                                <Setter TargetName="Border" Property="BorderThickness" Value="1,1,1,0"/>
                             </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Border" Property="BorderBrush" Value="#CCCCCC"/>
-                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                    <Condition Property="IsSelected" Value="False"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Border" Property="BorderBrush" Value="{DynamicResource TabHoverBorder}"/>
+                                <Setter TargetName="Border" Property="BorderThickness" Value="1,1,1,0"/>
+                            </MultiTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -47,13 +57,13 @@
             <StackPanel x:Name="HeaderPanel" Orientation="Horizontal" Grid.Column="0">
                 <Ellipse x:Name="StatusIndicator" Width="8" Height="8" Margin="0,0,5,0" 
                          VerticalAlignment="Center" Fill="Gray"/>
-                <TextBlock x:Name="TabTitle" Text="New Tab" Margin="0,0,5,0"/>
+                <TextBlock x:Name="TabTitle" Text="New Tab" Margin="0,0,5,0" Foreground="{DynamicResource TabForeground}"/>
             </StackPanel>
             <Button x:Name="CloseButton" Content="×" Width="20" Height="20" Grid.Column="1"
                     Padding="0" FontSize="14" FontWeight="Bold"
                     Click="CloseButton_Click" Cursor="Hand"
                     Background="Transparent" BorderThickness="0"
-                    Foreground="Gray" MouseEnter="CloseButton_MouseEnter" 
+                    Foreground="{DynamicResource TabForeground}" MouseEnter="CloseButton_MouseEnter" 
                     MouseLeave="CloseButton_MouseLeave"
                     Margin="0,0,2,0"/>
         </Grid>

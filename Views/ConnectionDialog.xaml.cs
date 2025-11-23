@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Markup;
 using Microsoft.Win32;
 using TabbySSH.Models;
 using TabbySSH.Views;
@@ -75,8 +76,9 @@ public partial class ConnectionDialog : Window
         BellNotificationComboBox.SelectedIndex = existingConfig.BellNotification switch
         {
             "Flash" => 0,
-            "Sound" => 1,
-            "None" => 2,
+            "Line Flash" => 1,
+            "Sound" => 2,
+            "None" => 3,
             _ => 0
         };
         
@@ -313,8 +315,9 @@ public partial class ConnectionDialog : Window
             BellNotification = BellNotificationComboBox.SelectedIndex switch
             {
                 0 => "Flash",
-                1 => "Sound",
-                2 => "None",
+                1 => "Line Flash",
+                2 => "Sound",
+                3 => "None",
                 _ => "Flash"
             },
             TerminalResizeMethod = TerminalResizeMethodComboBox.SelectedItem is ComboBoxItem resizeItem && resizeItem.Tag is string resizeTag ? resizeTag : "SSH",
@@ -336,6 +339,60 @@ public partial class ConnectionDialog : Window
     {
         DialogResult = false;
         Close();
+    }
+
+    private void TitleBar_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var source = e.OriginalSource as DependencyObject;
+        while (source != null)
+        {
+            if (source is Button)
+            {
+                return;
+            }
+            source = System.Windows.Media.VisualTreeHelper.GetParent(source) ?? System.Windows.LogicalTreeHelper.GetParent(source);
+        }
+
+        if (e.ClickCount == 2)
+        {
+            WindowState = WindowState == System.Windows.WindowState.Maximized ? System.Windows.WindowState.Normal : System.Windows.WindowState.Maximized;
+        }
+        else
+        {
+            DragMove();
+        }
+    }
+
+    private void CloseButton_Click(object sender, RoutedEventArgs e)
+    {
+        DialogResult = false;
+        Close();
+    }
+
+    private void CloseButton_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            button.Background = new SolidColorBrush(Colors.Red);
+            button.Foreground = new SolidColorBrush(Colors.White);
+        }
+    }
+
+    private void CloseButton_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            button.Background = Brushes.Transparent;
+            var titleBarForeground = Application.Current.Resources["TitleBarForeground"] as SolidColorBrush;
+            if (titleBarForeground != null)
+            {
+                button.Foreground = titleBarForeground;
+            }
+            else
+            {
+                button.Foreground = new SolidColorBrush(Colors.Black);
+            }
+        }
     }
 
     private void FontSizeUpButton_Click(object sender, RoutedEventArgs e)
@@ -364,14 +421,84 @@ public partial class ConnectionDialog : Window
         }
     }
 
-    private void FontFamilyComboBox_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    private void KeepAliveUpButton_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is ComboBox comboBox && !comboBox.IsDropDownOpen)
+        if (int.TryParse(KeepAliveTextBox.Text, out int value))
         {
-            comboBox.IsDropDownOpen = true;
-            e.Handled = true;
+            value = Math.Min(value + 1, 3600);
+            KeepAliveTextBox.Text = value.ToString();
+        }
+        else
+        {
+            KeepAliveTextBox.Text = "30";
         }
     }
+
+    private void KeepAliveDownButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (int.TryParse(KeepAliveTextBox.Text, out int value))
+        {
+            value = Math.Max(value - 1, 0);
+            KeepAliveTextBox.Text = value.ToString();
+        }
+        else
+        {
+            KeepAliveTextBox.Text = "30";
+        }
+    }
+
+    private void TimeoutUpButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (int.TryParse(TimeoutTextBox.Text, out int value))
+        {
+            value = Math.Min(value + 1, 3600);
+            TimeoutTextBox.Text = value.ToString();
+        }
+        else
+        {
+            TimeoutTextBox.Text = "30";
+        }
+    }
+
+    private void TimeoutDownButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (int.TryParse(TimeoutTextBox.Text, out int value))
+        {
+            value = Math.Max(value - 1, 0);
+            TimeoutTextBox.Text = value.ToString();
+        }
+        else
+        {
+            TimeoutTextBox.Text = "30";
+        }
+    }
+
+    private void PortUpButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (int.TryParse(PortTextBox.Text, out int port))
+        {
+            port = Math.Min(port + 1, 65535);
+            PortTextBox.Text = port.ToString();
+        }
+        else
+        {
+            PortTextBox.Text = "22";
+        }
+    }
+
+    private void PortDownButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (int.TryParse(PortTextBox.Text, out int port))
+        {
+            port = Math.Max(port - 1, 1);
+            PortTextBox.Text = port.ToString();
+        }
+        else
+        {
+            PortTextBox.Text = "22";
+        }
+    }
+
 
     private void ForegroundColorBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {

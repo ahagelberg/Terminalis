@@ -3,8 +3,12 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Select Color" Height="500" Width="500"
         WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize">
-    <Grid Margin="15">
+        ResizeMode="NoResize"
+        Background="{DynamicResource WindowBackground}">
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="32" ResizeBorderThickness="4" GlassFrameThickness="0"/>
+    </WindowChrome.WindowChrome>
+    <Grid Margin="15" Background="{DynamicResource WindowBackground}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -18,25 +22,25 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Grid.Column="0" Text="Predefined Colors" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            <TextBlock Grid.Column="0" Text="Predefined Colors" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource WindowForeground}"/>
             <Border Grid.Column="1" x:Name="ColorPreview" 
                     Width="60" Height="30"
-                    BorderBrush="#CCCCCC" BorderThickness="1"
+                    BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
                     CornerRadius="2"
-                    Background="White">
+                    Background="{DynamicResource TextBoxBackground}">
                 <TextBlock x:Name="HexTextBox" 
                            TextAlignment="Center" 
                            FontFamily="Consolas" 
                            FontSize="11"
                            FontWeight="Bold"
                            VerticalAlignment="Center"
-                           Foreground="Black"/>
+                           Foreground="{DynamicResource TextBoxForeground}"/>
             </Border>
         </Grid>
         
         <Border Grid.Row="1" x:Name="PredefinedColorsPanel" 
-                BorderBrush="#E0E0E0" BorderThickness="1" 
-                Background="White" 
+                BorderBrush="{DynamicResource BorderColorLight}" BorderThickness="1" 
+                Background="{DynamicResource TextBoxBackground}" 
                 Padding="6" 
                 Margin="0,0,0,15">
             <ItemsControl x:Name="PredefinedColorsItemsControl">
@@ -48,7 +52,7 @@
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
                         <Border Width="30" Height="30" 
-                                BorderBrush="#CCCCCC" 
+                                BorderBrush="{DynamicResource BorderColor}" 
                                 BorderThickness="1" 
                                 Margin="2"
                                 Cursor="Hand"
@@ -73,13 +77,13 @@
             </ItemsControl>
         </Border>
 
-        <TextBlock Grid.Row="2" Text="Color Gradient" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
+        <TextBlock Grid.Row="2" Text="Color Gradient" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8" Foreground="{DynamicResource WindowForeground}"/>
 
         <Border Grid.Row="3" x:Name="ColorGradientBorder"
                 Height="200"
-                BorderBrush="#CCCCCC" BorderThickness="1"
+                BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
                 Margin="0,0,0,15"
-                Background="White"
+                Background="{DynamicResource TextBoxBackground}"
                 MouseLeftButtonDown="ColorGradient_MouseLeftButtonDown"
                 MouseMove="ColorGradient_MouseMove"
                 MouseLeftButtonUp="ColorGradient_MouseLeftButtonUp">
@@ -101,9 +105,11 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="50"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="Red:" VerticalAlignment="Center" FontSize="11"/>
+                <TextBlock Grid.Column="0" Text="Red:" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource WindowForeground}"/>
                 <Slider Grid.Column="1" x:Name="RedSlider" Minimum="0" Maximum="255" ValueChanged="Slider_ValueChanged" Margin="8,0" TickFrequency="1" IsSnapToTickEnabled="False"/>
-                <TextBox Grid.Column="2" x:Name="RedTextBox" TextChanged="RedTextBox_TextChanged" VerticalContentAlignment="Center" Padding="3" FontSize="10" TextAlignment="Center"/>
+                <TextBox Grid.Column="2" x:Name="RedTextBox" TextChanged="RedTextBox_TextChanged" VerticalContentAlignment="Center" Padding="3" FontSize="10" TextAlignment="Center"
+                         Background="{DynamicResource TextBoxBackground}" Foreground="{DynamicResource TextBoxForeground}"
+                         BorderBrush="{DynamicResource TextBoxBorder}"/>
             </Grid>
             <Grid Margin="0,5">
                 <Grid.ColumnDefinitions>
@@ -111,9 +117,11 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="50"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="Green:" VerticalAlignment="Center" FontSize="11"/>
+                <TextBlock Grid.Column="0" Text="Green:" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource WindowForeground}"/>
                 <Slider Grid.Column="1" x:Name="GreenSlider" Minimum="0" Maximum="255" ValueChanged="Slider_ValueChanged" Margin="8,0" TickFrequency="1" IsSnapToTickEnabled="False"/>
-                <TextBox Grid.Column="2" x:Name="GreenTextBox" TextChanged="GreenTextBox_TextChanged" VerticalContentAlignment="Center" Padding="3" FontSize="10" TextAlignment="Center"/>
+                <TextBox Grid.Column="2" x:Name="GreenTextBox" TextChanged="GreenTextBox_TextChanged" VerticalContentAlignment="Center" Padding="3" FontSize="10" TextAlignment="Center"
+                         Background="{DynamicResource TextBoxBackground}" Foreground="{DynamicResource TextBoxForeground}"
+                         BorderBrush="{DynamicResource TextBoxBorder}"/>
             </Grid>
             <Grid Margin="0,5">
                 <Grid.ColumnDefinitions>
@@ -121,9 +129,11 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="50"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="Blue:" VerticalAlignment="Center" FontSize="11"/>
+                <TextBlock Grid.Column="0" Text="Blue:" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource WindowForeground}"/>
                 <Slider Grid.Column="1" x:Name="BlueSlider" Minimum="0" Maximum="255" ValueChanged="Slider_ValueChanged" Margin="8,0" TickFrequency="1" IsSnapToTickEnabled="False"/>
-                <TextBox Grid.Column="2" x:Name="BlueTextBox" TextChanged="BlueTextBox_TextChanged" VerticalContentAlignment="Center" Padding="3" FontSize="10" TextAlignment="Center"/>
+                <TextBox Grid.Column="2" x:Name="BlueTextBox" TextChanged="BlueTextBox_TextChanged" VerticalContentAlignment="Center" Padding="3" FontSize="10" TextAlignment="Center"
+                         Background="{DynamicResource TextBoxBackground}" Foreground="{DynamicResource TextBoxForeground}"
+                         BorderBrush="{DynamicResource TextBoxBorder}"/>
             </Grid>
             
             <Grid Margin="0,15,0,0">
@@ -132,8 +142,12 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Button Grid.Column="1" Content="OK" IsDefault="True" Click="OkButton_Click" Padding="20,6" Margin="0,0,10,0" MinWidth="75"/>
-                <Button Grid.Column="2" Content="Cancel" IsCancel="True" Click="CancelButton_Click" Padding="20,6" MinWidth="75"/>
+                <Button Grid.Column="1" Content="OK" IsDefault="True" Click="OkButton_Click" Padding="20,6" Margin="0,0,10,0" MinWidth="75"
+                        Background="{DynamicResource ButtonBackground}" Foreground="{DynamicResource ButtonForeground}"
+                        BorderBrush="{DynamicResource ButtonBorder}"/>
+                <Button Grid.Column="2" Content="Cancel" IsCancel="True" Click="CancelButton_Click" Padding="20,6" MinWidth="75"
+                        Background="{DynamicResource ButtonBackground}" Foreground="{DynamicResource ButtonForeground}"
+                        BorderBrush="{DynamicResource ButtonBorder}"/>
             </Grid>
         </StackPanel>
     </Grid>

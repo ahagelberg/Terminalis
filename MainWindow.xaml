@@ -7,8 +7,13 @@
         xmlns:views="clr-namespace:TabbySSH.Views"
         mc:Ignorable="d"
         Title="TabbySSH" Height="600" Width="900"
-        WindowStartupLocation="CenterScreen">
-    <Grid>
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource WindowBackground}">
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="0" ResizeBorderThickness="4" GlassFrameThickness="0"/>
+    </WindowChrome.WindowChrome>
+    <Border BorderBrush="{DynamicResource BorderColor}" BorderThickness="1">
+        <Grid Background="{DynamicResource WindowBackground}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -20,35 +25,90 @@
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <Menu Grid.Row="0" Grid.ColumnSpan="3">
-            <MenuItem Header="_File">
-                <MenuItem Header="_New Tab" x:Name="NewTabMenuItem" Click="NewTabMenuItem_Click" InputGestureText="Ctrl+T"/>
-                <MenuItem Header="_Close Tab" x:Name="CloseTabMenuItem" Click="CloseTabMenuItem_Click" InputGestureText="Ctrl+W"/>
-                <Separator/>
-                <MenuItem Header="E_xit" Click="ExitMenuItem_Click"/>
-            </MenuItem>
-            <MenuItem Header="_View">
-                <MenuItem Header="_Next Tab" x:Name="NextTabMenuItem" Click="NextTabMenuItem_Click" InputGestureText="Ctrl+Tab"/>
-                <MenuItem Header="_Previous Tab" x:Name="PreviousTabMenuItem" Click="PreviousTabMenuItem_Click" InputGestureText="Ctrl+Shift+Tab"/>
-            </MenuItem>
-            <MenuItem Header="_Tools">
-                <MenuItem Header="_Options..." x:Name="OptionsMenuItem" Click="OptionsMenuItem_Click"/>
-            </MenuItem>
-            <MenuItem Header="_Help">
-                <MenuItem Header="_About..." x:Name="AboutMenuItem" Click="AboutMenuItem_Click"/>
-            </MenuItem>
-        </Menu>
+        <Border x:Name="TitleBarBorder" Grid.Row="0" Grid.ColumnSpan="3" 
+                Background="{DynamicResource MenuBackground}" 
+                PreviewMouseLeftButtonDown="TitleBar_PreviewMouseLeftButtonDown"
+                Height="32">
+            <Grid VerticalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Menu Grid.Column="0" Background="Transparent" Foreground="{DynamicResource MenuForeground}" VerticalAlignment="Center" IsHitTestVisible="True" HorizontalAlignment="Left">
+                    <MenuItem Header="_File">
+                        <MenuItem Header="_New Session" x:Name="NewTabMenuItem" Click="NewTabMenuItem_Click" InputGestureText="Ctrl+T"/>
+                        <MenuItem Header="_Close Session" x:Name="CloseTabMenuItem" Click="CloseTabMenuItem_Click" InputGestureText="Ctrl+W"/>
+                        <Separator/>
+                        <MenuItem Header="_Options..." x:Name="OptionsMenuItem" Click="OptionsMenuItem_Click"/>
+                        <Separator/>
+                        <MenuItem Header="E_xit" Click="ExitMenuItem_Click"/>
+                    </MenuItem>
+                    <MenuItem Header="_View">
+                        <MenuItem Header="_Next Tab" x:Name="NextTabMenuItem" Click="NextTabMenuItem_Click" InputGestureText="Ctrl+Tab"/>
+                        <MenuItem Header="_Previous Tab" x:Name="PreviousTabMenuItem" Click="PreviousTabMenuItem_Click" InputGestureText="Ctrl+Shift+Tab"/>
+                    </MenuItem>
+                    <MenuItem Header="_Help">
+                        <MenuItem Header="_About..." x:Name="AboutMenuItem" Click="AboutMenuItem_Click"/>
+                    </MenuItem>
+                </Menu>
+                <TextBlock Grid.Column="1" 
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Center"
+                           IsHitTestVisible="False"
+                           Foreground="{DynamicResource MenuForeground}">
+                    <Run Text="TabbySSH" FontWeight="SemiBold"/>
+                    <Run Text=" " FontWeight="Normal"/>
+                    <Run x:Name="VersionRun" Text="" FontWeight="Normal"/>
+                </TextBlock>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="MinimizeButton" Content="0" Width="46" Height="32" 
+                            Click="MinimizeButton_Click" 
+                            Background="Transparent" BorderThickness="0"
+                            Foreground="{DynamicResource MenuForeground}"
+                            FontFamily="Marlett" FontSize="12"
+                            Cursor="Hand"
+                            MouseEnter="WindowButton_MouseEnter" MouseLeave="WindowButton_MouseLeave"/>
+                    <Button x:Name="MaximizeButton" Content="1" Width="46" Height="32"
+                            Click="MaximizeButton_Click"
+                            Background="Transparent" BorderThickness="0"
+                            Foreground="{DynamicResource MenuForeground}"
+                            FontFamily="Marlett" FontSize="12"
+                            Cursor="Hand"
+                            MouseEnter="WindowButton_MouseEnter" MouseLeave="WindowButton_MouseLeave"/>
+                    <Button x:Name="CloseButton" Content="r" Width="46" Height="32"
+                            Click="CloseButton_Click"
+                            Background="Transparent" BorderThickness="0"
+                            Foreground="{DynamicResource MenuForeground}"
+                            FontFamily="Marlett" FontSize="12"
+                            Cursor="Hand"
+                            MouseEnter="CloseButton_MouseEnter" MouseLeave="CloseButton_MouseLeave"/>
+                </StackPanel>
+                <Border x:Name="TitleBarAccentOverlay" 
+                        Background="Transparent" 
+                        Opacity="0.25"
+                        IsHitTestVisible="False"
+                        Grid.ColumnSpan="3"
+                        VerticalAlignment="Stretch"
+                        HorizontalAlignment="Stretch"
+                        Panel.ZIndex="100"/>
+            </Grid>
+        </Border>
 
         <views:SessionManagerPanel x:Name="SessionManagerPanel" Grid.Row="1" Grid.Column="0"/>
 
         <GridSplitter Grid.Row="1" Grid.Column="1" Width="5" 
-                      HorizontalAlignment="Stretch" Background="LightGray"
+                      HorizontalAlignment="Stretch" Background="{DynamicResource GridSplitterBackground}"
                       ResizeBehavior="PreviousAndNext"/>
 
         <TabControl x:Name="TerminalTabs" Grid.Row="1" Grid.Column="2" 
-                    SelectionChanged="TerminalTabs_SelectionChanged"/>
+                    SelectionChanged="TerminalTabs_SelectionChanged"
+                    AllowDrop="True"
+                    DragOver="TerminalTabs_DragOver"
+                    Drop="TerminalTabs_Drop"
+                    DragLeave="TerminalTabs_DragLeave"/>
 
-        <StatusBar Grid.Row="2" Grid.ColumnSpan="3">
+        <StatusBar Grid.Row="2" Grid.ColumnSpan="3" Background="{DynamicResource StatusBarBackground}" Foreground="{DynamicResource StatusBarForeground}">
             <StatusBarItem>
                 <TextBlock x:Name="StatusTextBlock" Text="Ready"/>
             </StatusBarItem>
@@ -56,16 +116,17 @@
 
         <Border x:Name="NotificationBorder" Grid.Row="1" Grid.Column="2" 
                 HorizontalAlignment="Right" VerticalAlignment="Top"
-                Margin="10" Padding="15,10" Background="#E0E0E0"
-                BorderBrush="#999999" BorderThickness="1"
+                Margin="10" Padding="15,10" Background="{DynamicResource NotificationBackground}"
+                BorderBrush="{DynamicResource NotificationBorder}" BorderThickness="1"
                 CornerRadius="5" Visibility="Collapsed"
                 Opacity="0.9">
             <StackPanel Orientation="Horizontal">
                 <Ellipse x:Name="NotificationIcon" Width="12" Height="12" 
                          Margin="0,0,10,0" VerticalAlignment="Center"/>
                 <TextBlock x:Name="NotificationText" VerticalAlignment="Center" 
-                           FontWeight="SemiBold"/>
+                           FontWeight="SemiBold" Foreground="{DynamicResource NotificationForeground}"/>
             </StackPanel>
         </Border>
     </Grid>
+    </Border>
 </Window>

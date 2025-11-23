@@ -31,7 +31,7 @@ public class SshSessionConfiguration : SessionConfiguration
     public int ConnectionTimeout { get; set; } = DEFAULT_CONNECTION_TIMEOUT;
     public bool CompressionEnabled { get; set; } = true;
     public bool X11ForwardingEnabled { get; set; } = true;
-    public string BellNotification { get; set; } = "Flash";
+    public string BellNotification { get; set; } = "Line Flash";
     public List<PortForwardingRule> PortForwardingRules { get; set; } = new();
     
     public string FontFamily { get; set; } = "Consolas";

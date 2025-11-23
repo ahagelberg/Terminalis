@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Markup;
 using TabbySSH.Models;
 using TabbySSH.Services.Connections;
 
@@ -20,11 +21,17 @@ public partial class TerminalTabItem : TabItem
     public string? ConnectionColor { get; private set; }
     public SshSessionConfiguration? SessionConfig { get; private set; }
 
+    private bool _isDragging = false;
+    private Point _dragStartPoint;
+
     public TerminalTabItem()
     {
         InitializeComponent();
         UpdateStatusIndicator(ConnectionStatus.Disconnected);
         ContextMenuOpening += TerminalTabItem_ContextMenuOpening;
+        PreviewMouseLeftButtonDown += TerminalTabItem_PreviewMouseLeftButtonDown;
+        MouseMove += TerminalTabItem_MouseMove;
+        MouseLeftButtonUp += TerminalTabItem_MouseLeftButtonUp;
     }
 
     private void TerminalTabItem_ContextMenuOpening(object sender, ContextMenuEventArgs e)
@@ -88,11 +95,7 @@ public partial class TerminalTabItem : TabItem
                 var brush = new BrushConverter().ConvertFromString(color) as SolidColorBrush;
                 if (brush != null)
                 {
-                    var accentBrush = new SolidColorBrush(brush.Color)
-                    {
-                        Opacity = 0.25
-                    };
-                    Background = accentBrush;
+                    Background = brush;
                 }
                 else
                 {
@@ -127,7 +130,7 @@ public partial class TerminalTabItem : TabItem
             else
             {
                 TabTitle.Text = $"{ConnectionName} ({DISCONNECTED_TEXT})";
-                TabTitle.Foreground = new SolidColorBrush(Colors.Gray);
+                TabTitle.ClearValue(TextBlock.ForegroundProperty);
                 UpdateStatusIndicator(ConnectionStatus.Disconnected);
                 ShowNonBlockingNotification($"{ConnectionName} disconnected", NotificationType.Info);
             }
@@ -159,7 +162,7 @@ public partial class TerminalTabItem : TabItem
         Dispatcher.BeginInvoke(new Action(() =>
         {
             TabTitle.Text = ConnectionName;
-            TabTitle.Foreground = new SolidColorBrush(Colors.Black);
+            TabTitle.ClearValue(TextBlock.ForegroundProperty);
             UpdateStatusIndicator(ConnectionStatus.Connected);
             ReconnectMenuItem.IsEnabled = false;
             
@@ -196,7 +199,7 @@ public partial class TerminalTabItem : TabItem
             return;
         }
 
-        Dispatcher.BeginInvoke(new Action(() =>
+        _ = Dispatcher.BeginInvoke(new Action(() =>
         {
             UpdateStatusIndicator(ConnectionStatus.Connecting);
             TabTitle.Text = $"{ConnectionName} ({CONNECTING_TEXT})";
@@ -225,7 +228,7 @@ public partial class TerminalTabItem : TabItem
         }
         catch (Exception ex)
         {
-            Dispatcher.BeginInvoke(new Action(() =>
+            _ = Dispatcher.BeginInvoke(new Action(() =>
             {
                 UpdateStatusIndicator(ConnectionStatus.Error);
                 TabTitle.Text = $"{ConnectionName} ({ERROR_TEXT})";
@@ -286,13 +289,14 @@ public partial class TerminalTabItem : TabItem
 
     private void CloseButton_MouseEnter(object sender, MouseEventArgs e)
     {
-        CloseButton.Foreground = new SolidColorBrush(Colors.Black);
-        CloseButton.Background = new SolidColorBrush(Colors.LightGray);
+        CloseButton.ClearValue(Button.ForegroundProperty);
+        var hoverBg = Application.Current.Resources["ButtonHoverBackground"] as SolidColorBrush;
+        CloseButton.Background = hoverBg ?? new SolidColorBrush(Colors.LightGray);
     }
 
     private void CloseButton_MouseLeave(object sender, MouseEventArgs e)
     {
-        CloseButton.Foreground = new SolidColorBrush(Colors.Gray);
+        CloseButton.ClearValue(Button.ForegroundProperty);
         CloseButton.Background = Brushes.Transparent;
     }
 
@@ -309,6 +313,43 @@ public partial class TerminalTabItem : TabItem
             {
             }
         }
+    }
+
+    private void TerminalTabItem_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.Source is Button)
+        {
+            return;
+        }
+        _dragStartPoint = e.GetPosition(null);
+        _isDragging = false;
+    }
+
+    private void TerminalTabItem_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            _isDragging = false;
+            return;
+        }
+
+        if (!_isDragging)
+        {
+            var currentPosition = e.GetPosition(null);
+            var diff = _dragStartPoint - currentPosition;
+            if (Math.Abs(diff.X) > SystemParameters.MinimumHorizontalDragDistance || 
+                Math.Abs(diff.Y) > SystemParameters.MinimumVerticalDragDistance)
+            {
+                _isDragging = true;
+                DragDrop.DoDragDrop(this, this, DragDropEffects.Move);
+                _isDragging = false;
+            }
+        }
+    }
+
+    private void TerminalTabItem_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        _isDragging = false;
     }
 }
 

@@ -17,6 +17,8 @@ namespace TabbySSH.Views;
 
 public partial class SessionManagerPanel : UserControl
 {
+    private const double DRAG_DISTANCE_MULTIPLIER = 3.0;
+
     private SessionManager? _sessionManager;
     private object? _selectedItem;
     private Point _dragStartPoint;
@@ -505,8 +507,10 @@ public partial class SessionManagerPanel : UserControl
         if (e.LeftButton == MouseButtonState.Pressed && _draggedItem != null)
         {
             var currentPosition = e.GetPosition(null);
-            if (Math.Abs(currentPosition.X - _dragStartPoint.X) > SystemParameters.MinimumHorizontalDragDistance ||
-                Math.Abs(currentPosition.Y - _dragStartPoint.Y) > SystemParameters.MinimumVerticalDragDistance)
+            var minHorizontalDistance = SystemParameters.MinimumHorizontalDragDistance * DRAG_DISTANCE_MULTIPLIER;
+            var minVerticalDistance = SystemParameters.MinimumVerticalDragDistance * DRAG_DISTANCE_MULTIPLIER;
+            if (Math.Abs(currentPosition.X - _dragStartPoint.X) > minHorizontalDistance ||
+                Math.Abs(currentPosition.Y - _dragStartPoint.Y) > minVerticalDistance)
             {
                 if (_draggedItem.Tag is SessionConfiguration session)
                 {

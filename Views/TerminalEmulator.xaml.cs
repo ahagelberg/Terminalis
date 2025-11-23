@@ -30,6 +30,7 @@ public partial class TerminalEmulator : UserControl
     private Point? _selectionStart;
     private Point? _selectionEnd;
     private Rectangle? _selectionOverlay;
+    private Rectangle? _lineFlashOverlay;
     private string _lineEnding = "\n";
 
     public TerminalEmulator()
@@ -67,7 +68,7 @@ public partial class TerminalEmulator : UserControl
         _connection.DataReceived += OnDataReceived;
         _connection.ConnectionClosed += OnConnectionClosed;
         _lineEnding = ConvertLineEndingString(lineEnding ?? "\n");
-        _bellNotification = bellNotification ?? "Flash";
+        _bellNotification = bellNotification ?? "Line Flash";
 
         if (_emulator != null)
         {
@@ -118,8 +119,9 @@ public partial class TerminalEmulator : UserControl
 
     private string? _customForegroundColor;
     private string? _customBackgroundColor;
-    private string _bellNotification = "Flash";
+    private string _bellNotification = "Line Flash";
     private DispatcherTimer? _flashTimer;
+    private DispatcherTimer? _lineFlashTimer;
 
     private void TerminalEmulator_Loaded(object sender, RoutedEventArgs e)
     {
@@ -370,6 +372,10 @@ public partial class TerminalEmulator : UserControl
             {
                 FlashWindow();
             }
+            else if (string.Equals(currentSetting, "Line Flash", StringComparison.OrdinalIgnoreCase))
+            {
+                FlashCurrentLine();
+            }
             else if (string.Equals(currentSetting, "None", StringComparison.OrdinalIgnoreCase))
             {
             }
@@ -484,6 +490,69 @@ public partial class TerminalEmulator : UserControl
         tabFlashTimer.Start();
     }
 
+    private void FlashCurrentLine()
+    {
+        if (TerminalCanvas == null || _emulator == null || _charHeight <= 0) return;
+
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            var currentFg = GetForegroundColor();
+            var cursorRow = _emulator.CursorRow;
+            
+            var y = cursorRow * _charHeight;
+            
+            if (y < 0 || TerminalCanvas.ActualHeight <= 0)
+            {
+                return;
+            }
+            
+            if (_lineFlashOverlay == null)
+            {
+                _lineFlashOverlay = new Rectangle
+                {
+                    IsHitTestVisible = false
+                };
+            }
+
+            _lineFlashOverlay.Width = TerminalCanvas.ActualWidth > 0 ? TerminalCanvas.ActualWidth : ActualWidth;
+            _lineFlashOverlay.Height = _charHeight;
+            Canvas.SetLeft(_lineFlashOverlay, 0);
+            Canvas.SetTop(_lineFlashOverlay, y);
+            _lineFlashOverlay.Fill = new SolidColorBrush(currentFg);
+            _lineFlashOverlay.Visibility = Visibility.Visible;
+            _lineFlashOverlay.Opacity = 1.0;
+
+            if (!TerminalCanvas.Children.Contains(_lineFlashOverlay))
+            {
+                TerminalCanvas.Children.Add(_lineFlashOverlay);
+            }
+
+            if (_lineFlashTimer != null)
+            {
+                _lineFlashTimer.Stop();
+            }
+
+            _lineFlashTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(75)
+            };
+            _lineFlashTimer.Tick += (s, e) =>
+            {
+                _lineFlashTimer.Stop();
+                if (_lineFlashOverlay != null)
+                {
+                    _lineFlashOverlay.Opacity = 0;
+                    _lineFlashOverlay.Visibility = Visibility.Collapsed;
+                    if (TerminalCanvas.Children.Contains(_lineFlashOverlay))
+                    {
+                        TerminalCanvas.Children.Remove(_lineFlashOverlay);
+                    }
+                }
+            };
+            _lineFlashTimer.Start();
+        }));
+    }
+
     private static T? FindParent<T>(DependencyObject child) where T : DependencyObject
     {
         var parentObject = VisualTreeHelper.GetParent(child);
@@ -504,8 +573,10 @@ public partial class TerminalEmulator : UserControl
         var currentCursorCol = _emulator.CursorCol;
 
         var selectionOverlay = _selectionOverlay;
+        var lineFlashOverlay = _lineFlashOverlay;
         TerminalCanvas.Children.Clear();
         _selectionOverlay = null;
+        _lineFlashOverlay = null;
 
         var startRow = Math.Max(0, _scrollOffset);
         var endRow = Math.Min(_emulator.Rows, startRow + (int)(ActualHeight / _charHeight) + 1);
@@ -525,6 +596,12 @@ public partial class TerminalEmulator : UserControl
             _selectionOverlay = selectionOverlay;
             TerminalCanvas.Children.Add(_selectionOverlay);
             UpdateSelection();
+        }
+
+        if (lineFlashOverlay != null && lineFlashOverlay.Visibility == Visibility.Visible)
+        {
+            _lineFlashOverlay = lineFlashOverlay;
+            TerminalCanvas.Children.Add(_lineFlashOverlay);
         }
 
         _previousCursorRow = currentCursorRow;
@@ -1006,6 +1083,28 @@ public partial class TerminalEmulator : UserControl
                 {
                     mainWindow.NextTab();
                 }
+            }
+            return;
+        }
+
+        if (key == Key.T && modifiers.HasFlag(ModifierKeys.Control))
+        {
+            e.Handled = true;
+            var mainWindow = Window.GetWindow(this) as MainWindow;
+            if (mainWindow != null)
+            {
+                mainWindow.NewTabMenuItem_Click(this, e);
+            }
+            return;
+        }
+
+        if (key == Key.W && modifiers.HasFlag(ModifierKeys.Control))
+        {
+            e.Handled = true;
+            var mainWindow = Window.GetWindow(this) as MainWindow;
+            if (mainWindow != null)
+            {
+                mainWindow.CloseTabMenuItem_Click(this, e);
             }
             return;
         }
