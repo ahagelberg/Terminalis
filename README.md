@@ -11,6 +11,7 @@ TabbySSH allows you to connect to remote servers via SSH and manage multiple ter
 TabbySSH was created to solve usability annoyances present in PuTTY and multi-tab wrappers for PuTTY:
 
 ### Alt+Tab Not Working as Expected
+
 All tested wrappers require double-tap on Tab when using Alt+Tab, making window switching frustrating. TabbySSH handles window focus correctly so Alt+Tab works on the first press.
 
 ### Disconnected Terminal Dialog Boxes
