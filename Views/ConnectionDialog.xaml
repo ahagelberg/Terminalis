@@ -236,6 +236,16 @@
                         <ColumnDefinition Width="120"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Screen Session:" VerticalAlignment="Center"/>
+                    <TextBox Grid.Column="1" x:Name="ScreenSessionNameTextBox" Margin="10,0,0,0" VerticalContentAlignment="Center"/>
+                </Grid>
+                <TextBlock Text="(Leave empty to connect normally. Enter a name to connect to/create a persistent screen session)" 
+                           FontSize="10" FontStyle="Italic" Foreground="Gray" Margin="0,0,0,5"/>
+                <Grid Margin="0,5">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="120"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Line Ending:" VerticalAlignment="Center"/>
                     <ComboBox Grid.Column="1" x:Name="LineEndingComboBox" Margin="10,0,0,0" SelectedIndex="0">
                         <ComboBoxItem Content="Unix (LF)" Tag="\n"/>

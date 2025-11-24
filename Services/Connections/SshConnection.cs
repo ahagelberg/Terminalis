@@ -101,6 +101,7 @@ public class SshConnection : ITerminalConnection
 
                 await SetupPortForwarding();
                 await SetupX11Forwarding();
+                await SetupScreenSession();
 
                 return true;
             }
@@ -145,6 +146,75 @@ public class SshConnection : ITerminalConnection
                     Debug.WriteLine($"[SshConnection] Failed to setup port forwarding {rule.Name}: {ex.Message}");
                     System.Console.WriteLine($"[SshConnection] Failed to setup port forwarding {rule.Name}: {ex.Message}");
                 }
+            }
+        });
+    }
+
+    private async Task SetupScreenSession()
+    {
+        if (string.IsNullOrWhiteSpace(_config.ScreenSessionName) || _sshClient == null || !_sshClient.IsConnected || _shellStream == null)
+        {
+            return;
+        }
+
+        await Task.Run(() =>
+        {
+            try
+            {
+                var sessionName = _config.ScreenSessionName.Trim();
+                
+                var checkScreenCommand = _sshClient.CreateCommand("which screen 2>/dev/null || command -v screen 2>/dev/null || echo ''");
+                checkScreenCommand.Execute();
+                
+                if (string.IsNullOrWhiteSpace(checkScreenCommand.Result.Trim()))
+                {
+                    ErrorOccurred?.Invoke(this, "Screen is not installed on the server. Please install screen or leave the screen session name empty.");
+                    return;
+                }
+                
+                var listSessionsCommand = _sshClient.CreateCommand("screen -list 2>/dev/null || echo ''");
+                listSessionsCommand.Execute();
+                var sessionListOutput = listSessionsCommand.Result ?? string.Empty;
+                
+                bool sessionExists = false;
+                bool sessionAttached = false;
+                
+                if (!string.IsNullOrWhiteSpace(sessionListOutput))
+                {
+                    var lines = sessionListOutput.Split('\n');
+                    foreach (var line in lines)
+                    {
+                        if (line.Contains(sessionName))
+                        {
+                            sessionExists = true;
+                            sessionAttached = line.Contains("(Attached)") || line.Contains("(Multi");
+                            break;
+                        }
+                    }
+                }
+                
+                System.Threading.Thread.Sleep(500);
+                
+                var escapedSessionName = sessionName.Replace("'", "'\"'\"'");
+                if (sessionExists)
+                {
+                    if (sessionAttached)
+                    {
+                        _shellStream.WriteLine($"screen -x '{escapedSessionName}'");
+                    }
+                    else
+                    {
+                        _shellStream.WriteLine($"screen -r '{escapedSessionName}'");
+                    }
+                }
+                else
+                {
+                    _shellStream.WriteLine($"screen -S '{escapedSessionName}'");
+                }
+            }
+            catch (Exception ex)
+            {
+                ErrorOccurred?.Invoke(this, $"Failed to setup screen session: {ex.Message}");
             }
         });
     }

@@ -41,6 +41,7 @@ public class SshSessionConfiguration : SessionConfiguration
     public string TerminalResizeMethod { get; set; } = "SSH";
     public bool ResetScrollOnUserInput { get; set; } = true;
     public bool ResetScrollOnServerOutput { get; set; } = false;
+    public string? ScreenSessionName { get; set; }
 
     public SshSessionConfiguration()
     {

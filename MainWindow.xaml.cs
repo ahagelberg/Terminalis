@@ -266,6 +266,7 @@ public partial class MainWindow : Window
                 sshConfig.CompressionEnabled = newConfig.CompressionEnabled;
                 sshConfig.ResetScrollOnUserInput = newConfig.ResetScrollOnUserInput;
                 sshConfig.ResetScrollOnServerOutput = newConfig.ResetScrollOnServerOutput;
+                sshConfig.ScreenSessionName = newConfig.ScreenSessionName;
                 sshConfig.X11ForwardingEnabled = newConfig.X11ForwardingEnabled;
                 sshConfig.BellNotification = newConfig.BellNotification;
                 sshConfig.Color = newConfig.Color;
