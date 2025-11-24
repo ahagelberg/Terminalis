@@ -28,9 +28,32 @@ public partial class App : Application
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr GetStdHandle(int nStdHandle);
 
+    [DllImport("shcore.dll")]
+    private static extern int SetProcessDpiAwareness(ProcessDpiAwareness value);
+
+    private enum ProcessDpiAwareness
+    {
+        ProcessDpiUnaware = 0,
+        ProcessSystemDpiAware = 1,
+        ProcessPerMonitorDpiAware = 2
+    }
+
     private const int STD_OUTPUT_HANDLE = -11;
     private const uint ENABLE_PROCESSED_OUTPUT = 0x0001;
     private const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
+
+    static App()
+    {
+        // Set per-monitor DPI awareness before any windows are created
+        try
+        {
+            SetProcessDpiAwareness(ProcessDpiAwareness.ProcessPerMonitorDpiAware);
+        }
+        catch
+        {
+            // If shcore.dll is not available (Windows 7), fall back to manifest
+        }
+    }
 
     public static ThemeManager ThemeManager { get; private set; } = null!;
 
