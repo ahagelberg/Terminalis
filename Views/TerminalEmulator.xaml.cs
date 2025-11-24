@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
@@ -15,7 +16,8 @@ public partial class TerminalEmulator : UserControl
 {
     private const int DEFAULT_FONT_SIZE = 12;
     private const int DEFAULT_SCROLLBACK_LINES = 20000;
-    private const int RENDER_THROTTLE_MS = 16;
+    private const int RENDER_THROTTLE_MS = 33; // ~30 FPS for smoother scrolling
+    private const int SCROLL_LINES_PER_TICK = 3;
 
     private Vt100Emulator? _emulator;
     private ITerminalConnection? _connection;
@@ -34,6 +36,8 @@ public partial class TerminalEmulator : UserControl
     private int? _selectionEndCol;
     private Rectangle? _lineFlashOverlay;
     private string _lineEnding = "\n";
+    private bool _resetScrollOnUserInput = true;
+    private bool _resetScrollOnServerOutput = false;
 
     public TerminalEmulator()
     {
@@ -60,7 +64,7 @@ public partial class TerminalEmulator : UserControl
         _renderTimer.Tick += RenderTimer_Tick;
     }
 
-    public void AttachConnection(ITerminalConnection connection, string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null)
+    public void AttachConnection(ITerminalConnection connection, string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool resetScrollOnUserInput = true, bool resetScrollOnServerOutput = false)
     {
         if (_connection != null)
         {
@@ -73,6 +77,8 @@ public partial class TerminalEmulator : UserControl
         _connection.ConnectionClosed += OnConnectionClosed;
         _lineEnding = ConvertLineEndingString(lineEnding ?? "\n");
         _bellNotification = bellNotification ?? "Line Flash";
+        _resetScrollOnUserInput = resetScrollOnUserInput;
+        _resetScrollOnServerOutput = resetScrollOnServerOutput;
 
         if (_emulator != null)
         {
@@ -134,6 +140,7 @@ public partial class TerminalEmulator : UserControl
             InitializeFont();
         }
         UpdateTerminalSize();
+        UpdateCanvasHeight();
         RenderScreen();
         Focus();
         
@@ -264,7 +271,8 @@ public partial class TerminalEmulator : UserControl
         Dispatcher.BeginInvoke(new Action(() =>
         {
             TerminalCanvas.Width = cols * _charWidth;
-            TerminalCanvas.Height = rows * _charHeight;
+            // Canvas height should be large enough for scrollback, but we'll update it dynamically
+            UpdateCanvasHeight();
         }));
     }
 
@@ -283,6 +291,11 @@ public partial class TerminalEmulator : UserControl
             if (_emulator != null)
             {
                 _emulator.ProcessData(data);
+                
+                if (_resetScrollOnServerOutput && _scrollOffset > 0)
+                {
+                    ResetScrollPosition();
+                }
             }
         }));
     }
@@ -336,6 +349,19 @@ public partial class TerminalEmulator : UserControl
 
     private void OnScreenChanged(object? sender, EventArgs e)
     {
+        if (_emulator != null)
+        {
+            // Update canvas height to accommodate scrollback
+            UpdateCanvasHeight();
+            
+            // Auto-scroll to bottom if user is already at bottom (scrollOffset == 0)
+            // If user has scrolled up, keep their position
+            if (_scrollOffset == 0)
+            {
+                // Stay at bottom (scrollOffset remains 0)
+                UpdateCanvasTransform();
+            }
+        }
         ScheduleRender();
     }
 
@@ -583,12 +609,21 @@ public partial class TerminalEmulator : UserControl
         TerminalCanvas.Children.Clear();
         _lineFlashOverlay = null;
 
-        var startRow = Math.Max(0, _scrollOffset);
-        var endRow = Math.Min(_emulator.Rows, startRow + (int)(ActualHeight / _charHeight) + 1);
+        // Calculate which rows to render based on scroll offset
+        // Unified buffer: rows 0 to (ScrollbackCount-1) are scrollback, rows ScrollbackCount to (ScrollbackCount+Rows-1) are current screen
+        var totalRows = _emulator.Rows + _emulator.ScrollbackLineCount;
+        var visibleRows = (int)(ActualHeight / _charHeight) + 1;
+        
+        // When scrollOffset = 0, show current screen (rows ScrollbackCount to totalRows-1)
+        // When scrollOffset = 10, show older content (rows ScrollbackCount-10 to ScrollbackCount-10+visibleRows-1)
+        var startRow = Math.Max(0, _emulator.ScrollbackLineCount - _scrollOffset);
+        var endRow = Math.Min(totalRows, startRow + visibleRows);
 
+        // Render only visible rows, positioned relative to viewport (row 0 at top of viewport)
         for (int row = startRow; row < endRow; row++)
         {
-            RenderLine(row);
+            var viewportRow = row - startRow; // Position in viewport (0 = top)
+            RenderLine(row, viewportRow);
         }
 
         if (_scrollOffset == 0)
@@ -606,14 +641,15 @@ public partial class TerminalEmulator : UserControl
         _previousCursorCol = currentCursorCol;
     }
 
-    private void RenderLine(int row)
+    private void RenderLine(int bufferRow, int viewportRow)
     {
         if (_emulator == null || _typeface == null)
         {
             return;
         }
 
-        var y = (row - _scrollOffset) * _charHeight;
+        // Calculate y position: viewportRow 0 is at top of viewport
+        var y = viewportRow * _charHeight;
         var currentFg = -1;
         var currentBg = -1;
         var currentBold = false;
@@ -632,14 +668,17 @@ public partial class TerminalEmulator : UserControl
         {
 
             TerminalCell cell;
-            if (row < _emulator.Rows)
+            // Unified buffer: rows 0 to (ScrollbackCount-1) are scrollback, rows ScrollbackCount to (ScrollbackCount+Rows-1) are current screen
+            if (bufferRow < _emulator.ScrollbackLineCount)
             {
-                cell = _emulator.GetCell(row, col);
+                // This is scrollback
+                cell = _emulator.GetScrollbackCell(bufferRow, col);
             }
             else
             {
-                var scrollbackRow = row - _emulator.Rows;
-                cell = _emulator.GetScrollbackCell(scrollbackRow, col);
+                // This is current screen
+                var screenRow = bufferRow - _emulator.ScrollbackLineCount;
+                cell = _emulator.GetCell(screenRow, col);
             }
 
             var fg = cell.Reverse ? cell.BackgroundColor : cell.ForegroundColor;
@@ -659,7 +698,7 @@ public partial class TerminalEmulator : UserControl
             {
                 if (!string.IsNullOrEmpty(textRun))
                 {
-                    RenderTextSegment(x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, row);
+                    RenderTextSegment(x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, bufferRow);
                     x += textRun.Length * _charWidth;
                 }
 
@@ -687,7 +726,7 @@ public partial class TerminalEmulator : UserControl
 
         if (!string.IsNullOrEmpty(textRun))
         {
-            RenderTextSegment(x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, row);
+            RenderTextSegment(x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, bufferRow);
         }
     }
 
@@ -1012,6 +1051,21 @@ public partial class TerminalEmulator : UserControl
 
     private void TerminalEmulator_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
+        // Don't handle clicks on the scrollbar or its parts
+        var source = e.OriginalSource;
+        if (source is Thumb || 
+            source is RepeatButton ||
+            source is ScrollBar)
+        {
+            return;
+        }
+        
+        var sourceDependencyObject = source as DependencyObject;
+        if (sourceDependencyObject != null && FindParent<ScrollBar>(sourceDependencyObject) != null)
+        {
+            return;
+        }
+        
         if (e.LeftButton == MouseButtonState.Pressed)
         {
             // Check if click is over the Canvas
@@ -1030,7 +1084,12 @@ public partial class TerminalEmulator : UserControl
                 
                 // Calculate cell position
                 var col = Math.Max(0, Math.Min(_emulator.Cols - 1, (int)(pos.X / _charWidth)));
-                var row = Math.Max(0, (int)(pos.Y / _charHeight) + _scrollOffset);
+                // Mouse position in viewport (0 = top of visible area)
+                var viewportRow = Math.Max(0, (int)(pos.Y / _charHeight));
+                // Convert viewport row to buffer row
+                var startRow = Math.Max(0, _emulator.ScrollbackLineCount - _scrollOffset);
+                var row = startRow + viewportRow;
+                row = Math.Min(row, _emulator.Rows + _emulator.ScrollbackLineCount - 1);
                 
                 // Handle double-click (word selection) and triple-click (line selection)
                 if (e.ClickCount == 2)
@@ -1099,11 +1158,31 @@ public partial class TerminalEmulator : UserControl
     
     private void TerminalEmulator_PreviewMouseMove(object sender, MouseEventArgs e)
     {
+        // Don't handle mouse move over the scrollbar or its parts
+        var source = e.OriginalSource;
+        if (source is Thumb || 
+            source is RepeatButton ||
+            source is ScrollBar)
+        {
+            return;
+        }
+        
+        var sourceDependencyObject = source as DependencyObject;
+        if (sourceDependencyObject != null && FindParent<ScrollBar>(sourceDependencyObject) != null)
+        {
+            return;
+        }
+        
         if (_isSelecting && e.LeftButton == MouseButtonState.Pressed && _emulator != null && _charWidth > 0 && _charHeight > 0)
         {
             var pos = e.GetPosition(TerminalCanvas);
             var col = Math.Max(0, Math.Min(_emulator.Cols - 1, (int)(pos.X / _charWidth)));
-            var row = Math.Max(0, (int)(pos.Y / _charHeight) + _scrollOffset);
+            // Mouse position in viewport (0 = top of visible area)
+            var viewportRow = Math.Max(0, (int)(pos.Y / _charHeight));
+            // Convert viewport row to buffer row
+            var startRow = Math.Max(0, _emulator.ScrollbackLineCount - _scrollOffset);
+            var row = startRow + viewportRow;
+            row = Math.Min(row, _emulator.Rows + _emulator.ScrollbackLineCount - 1);
             
             if (_selectionEndRow != row || _selectionEndCol != col)
             {
@@ -1413,6 +1492,11 @@ public partial class TerminalEmulator : UserControl
                 return;
             }
             
+            if (_resetScrollOnUserInput && _scrollOffset > 0)
+            {
+                ResetScrollPosition();
+            }
+            
             e.Handled = true;
             _ = Task.Run(async () =>
             {
@@ -1588,6 +1672,11 @@ public partial class TerminalEmulator : UserControl
 
         if (sequence != null)
         {
+            if (_resetScrollOnUserInput && _scrollOffset > 0)
+            {
+                ResetScrollPosition();
+            }
+            
             var seq = sequence;
             _ = Task.Run(async () =>
             {
@@ -1715,6 +1804,11 @@ public partial class TerminalEmulator : UserControl
                 ClearSelection();
             }
             
+            if (_resetScrollOnUserInput && _scrollOffset > 0)
+            {
+                ResetScrollPosition();
+            }
+            
             try
             {
                 await _connection.WriteAsync(sequence);
@@ -1743,10 +1837,127 @@ public partial class TerminalEmulator : UserControl
             ClearSelection();
         }
 
-        var delta = e.Delta > 0 ? -3 : 3;
-        _scrollOffset = Math.Max(0, Math.Min(_scrollOffset + delta, _emulator.ScrollbackLineCount));
+        // Scroll by SCROLL_LINES_PER_TICK lines per wheel tick
+        // e.Delta > 0 means scroll up (see older content), e.Delta < 0 means scroll down (see newer content)
+        var delta = e.Delta > 0 ? SCROLL_LINES_PER_TICK : -SCROLL_LINES_PER_TICK;
+        var totalRows = _emulator.Rows + _emulator.ScrollbackLineCount;
+        var maxScroll = Math.Max(0, totalRows - _emulator.Rows);
+        var newScrollOffset = Math.Max(0, Math.Min(_scrollOffset + delta, maxScroll));
+        if (newScrollOffset != _scrollOffset)
+        {
+            _scrollOffset = newScrollOffset;
+            UpdateScrollBar();
+            UpdateCanvasTransform();
+            // Render immediately for responsive scrolling, don't throttle
+            RenderScreen();
+        }
+        e.Handled = true;
+    }
+    
+    private void UpdateCanvasHeight()
+    {
+        if (_emulator == null || _charHeight == 0)
+        {
+            return;
+        }
+        
+        // Canvas should only be as tall as the visible viewport, not the entire scrollback
+        // This prevents it from extending beyond the container
+        TerminalCanvas.Height = ActualHeight;
+        UpdateScrollBar();
+        UpdateCanvasTransform();
+    }
+    
+    private void UpdateCanvasTransform()
+    {
+        if (_emulator == null || _charHeight == 0)
+        {
+            return;
+        }
+        
+        // Canvas is now only viewport-sized, so we don't need translation
+        // Instead, we render the correct rows at their correct positions
+        // No transform needed - rendering handles the scroll offset
+        TerminalCanvas.RenderTransform = null;
+    }
+    
+    private void ResetScrollPosition()
+    {
+        if (_scrollOffset == 0)
+        {
+            return;
+        }
+        
+        _scrollOffset = 0;
+        UpdateScrollBar();
+        UpdateCanvasTransform();
         RenderScreen();
     }
+    
+    private void UpdateScrollBar()
+    {
+        if (_emulator == null || _charHeight == 0)
+        {
+            TerminalScrollBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+        
+        var totalRows = _emulator.Rows + _emulator.ScrollbackLineCount;
+        var visibleRows = (int)(ActualHeight / _charHeight);
+        var scrollbackCount = _emulator.ScrollbackLineCount;
+        var maxScroll = Math.Max(0, totalRows - _emulator.Rows);
+        
+        if (maxScroll > 0 && totalRows > 0)
+        {
+            TerminalScrollBar.Maximum = maxScroll;
+            TerminalScrollBar.ViewportSize = Math.Max(1, visibleRows);
+            TerminalScrollBar.Value = maxScroll - _scrollOffset;
+            TerminalScrollBar.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            TerminalScrollBar.Visibility = Visibility.Collapsed;
+        }
+    }
+    
+    private void TerminalScrollBar_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_emulator == null)
+        {
+            return;
+        }
+        
+        var totalRows = _emulator.Rows + _emulator.ScrollbackLineCount;
+        var maxScroll = Math.Max(0, totalRows - _emulator.Rows);
+        var newScrollOffset = maxScroll - (int)e.NewValue;
+        
+        if (newScrollOffset != _scrollOffset)
+        {
+            _scrollOffset = newScrollOffset;
+            UpdateCanvasTransform();
+            RenderScreen();
+        }
+    }
+    
+    private void TerminalScrollBar_Scroll(object sender, ScrollEventArgs e)
+    {
+        if (_emulator == null)
+        {
+            return;
+        }
+        
+        var totalRows = _emulator.Rows + _emulator.ScrollbackLineCount;
+        var maxScroll = Math.Max(0, totalRows - _emulator.Rows);
+        var newScrollOffset = maxScroll - (int)TerminalScrollBar.Value;
+        
+        if (newScrollOffset != _scrollOffset)
+        {
+            _scrollOffset = newScrollOffset;
+            UpdateCanvasTransform();
+            RenderScreen();
+        }
+    }
+    
 
     private static string ConvertLineEndingString(string lineEnding)
     {

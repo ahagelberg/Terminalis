@@ -71,6 +71,8 @@ public partial class ConnectionDialog : Window
         KeepAliveTextBox.Text = existingConfig.KeepAliveInterval.ToString();
         TimeoutTextBox.Text = existingConfig.ConnectionTimeout.ToString();
         CompressionCheckBox.IsChecked = existingConfig.CompressionEnabled;
+        ResetScrollOnUserInputCheckBox.IsChecked = existingConfig.ResetScrollOnUserInput;
+        ResetScrollOnServerOutputCheckBox.IsChecked = existingConfig.ResetScrollOnServerOutput;
         X11ForwardingCheckBox.IsChecked = existingConfig.X11ForwardingEnabled;
         
         BellNotificationComboBox.SelectedIndex = existingConfig.BellNotification switch
@@ -171,17 +173,19 @@ public partial class ConnectionDialog : Window
 
     private void PasswordAuthRadio_Checked(object? sender, RoutedEventArgs? e)
     {
-        if (PasswordGrid != null)
+        if (PasswordBox != null)
         {
-            PasswordGrid.Visibility = Visibility.Visible;
+            PasswordBox.IsEnabled = true;
+            PasswordBox.Visibility = Visibility.Visible;
         }
     }
 
     private void KeyAuthRadio_Checked(object? sender, RoutedEventArgs? e)
     {
-        if (PasswordGrid != null)
+        if (PasswordBox != null)
         {
-            PasswordGrid.Visibility = Visibility.Collapsed;
+            PasswordBox.IsEnabled = false;
+            PasswordBox.Visibility = Visibility.Collapsed;
         }
     }
 
@@ -311,6 +315,8 @@ public partial class ConnectionDialog : Window
             KeepAliveInterval = keepAlive,
             ConnectionTimeout = timeout,
             CompressionEnabled = CompressionCheckBox.IsChecked == true,
+            ResetScrollOnUserInput = ResetScrollOnUserInputCheckBox.IsChecked == true,
+            ResetScrollOnServerOutput = ResetScrollOnServerOutputCheckBox.IsChecked == true,
             X11ForwardingEnabled = X11ForwardingCheckBox.IsChecked == true,
             BellNotification = BellNotificationComboBox.SelectedIndex switch
             {

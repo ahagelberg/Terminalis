@@ -6,19 +6,35 @@
              mc:Ignorable="d"
              d:DesignHeight="450" d:DesignWidth="800"
              Focusable="True"
-             Background="Black">
-    <Grid>
-        <ScrollViewer x:Name="ScrollViewer" 
-                      VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Disabled"
-                      Focusable="False">
-            <Canvas x:Name="TerminalCanvas" 
-                    Background="Black"
-                    Focusable="False"
-                    ClipToBounds="True"
-                    IsHitTestVisible="True"/>
-        </ScrollViewer>
+             Background="Black"
+             ClipToBounds="True">
+    <Grid ClipToBounds="True">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <Canvas x:Name="TerminalCanvas" 
+                Grid.Column="0"
+                Background="Black"
+                Focusable="False"
+                ClipToBounds="True"
+                IsHitTestVisible="True"/>
+        <ScrollBar x:Name="TerminalScrollBar"
+                   Grid.Column="1"
+                   Orientation="Vertical"
+                   Minimum="0"
+                   Maximum="0"
+                   Value="0"
+                   ViewportSize="0"
+                   SmallChange="1"
+                   LargeChange="10"
+                   Scroll="TerminalScrollBar_Scroll"
+                   ValueChanged="TerminalScrollBar_ValueChanged"
+                   Cursor="Arrow"
+                   IsHitTestVisible="True"
+                   Visibility="Collapsed"/>
         <Rectangle x:Name="FlashOverlay" 
+                   Grid.Column="0"
                    Fill="White" 
                    Opacity="0" 
                    IsHitTestVisible="False"

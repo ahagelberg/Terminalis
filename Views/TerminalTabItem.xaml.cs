@@ -57,7 +57,7 @@ public partial class TerminalTabItem : TabItem
         connection.ConnectionClosed += OnConnectionClosed;
         connection.ErrorOccurred += OnErrorOccurred;
         
-        TerminalControl.AttachConnection(connection, config?.LineEnding, config?.FontFamily, config?.FontSize, config?.ForegroundColor, config?.BackgroundColor, config?.BellNotification);
+        TerminalControl.AttachConnection(connection, config?.LineEnding, config?.FontFamily, config?.FontSize, config?.ForegroundColor, config?.BackgroundColor, config?.BellNotification, config?.ResetScrollOnUserInput ?? true, config?.ResetScrollOnServerOutput ?? false);
         
         if (connection.IsConnected)
         {
@@ -321,6 +321,14 @@ public partial class TerminalTabItem : TabItem
         {
             return;
         }
+        
+        var source = e.OriginalSource as System.Windows.DependencyObject;
+        if (IsScrollBarOrChild(source))
+        {
+            _isDragging = false;
+            return;
+        }
+        
         _dragStartPoint = e.GetPosition(null);
         _isDragging = false;
     }
@@ -328,6 +336,13 @@ public partial class TerminalTabItem : TabItem
     private void TerminalTabItem_MouseMove(object sender, MouseEventArgs e)
     {
         if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            _isDragging = false;
+            return;
+        }
+        
+        var source = e.OriginalSource as System.Windows.DependencyObject;
+        if (IsScrollBarOrChild(source))
         {
             _isDragging = false;
             return;
@@ -345,6 +360,21 @@ public partial class TerminalTabItem : TabItem
                 _isDragging = false;
             }
         }
+    }
+    
+    private static bool IsScrollBarOrChild(System.Windows.DependencyObject? element)
+    {
+        while (element != null)
+        {
+            if (element is System.Windows.Controls.Primitives.ScrollBar ||
+                element is System.Windows.Controls.Primitives.Thumb ||
+                element is System.Windows.Controls.Primitives.RepeatButton)
+            {
+                return true;
+            }
+            element = System.Windows.Media.VisualTreeHelper.GetParent(element);
+        }
+        return false;
     }
 
     private void TerminalTabItem_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)

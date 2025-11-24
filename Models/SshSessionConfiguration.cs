@@ -39,6 +39,8 @@ public class SshSessionConfiguration : SessionConfiguration
     public string? ForegroundColor { get; set; }
     public string? BackgroundColor { get; set; }
     public string TerminalResizeMethod { get; set; } = "SSH";
+    public bool ResetScrollOnUserInput { get; set; } = true;
+    public bool ResetScrollOnServerOutput { get; set; } = false;
 
     public SshSessionConfiguration()
     {
