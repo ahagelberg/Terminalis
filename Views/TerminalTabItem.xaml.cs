@@ -57,7 +57,7 @@ public partial class TerminalTabItem : TabItem
         connection.ConnectionClosed += OnConnectionClosed;
         connection.ErrorOccurred += OnErrorOccurred;
         
-        TerminalControl.AttachConnection(connection, config?.LineEnding, config?.FontFamily, config?.FontSize, config?.ForegroundColor, config?.BackgroundColor, config?.BellNotification, config?.ResetScrollOnUserInput ?? true, config?.ResetScrollOnServerOutput ?? false);
+        TerminalControl.AttachConnection(connection, config?.LineEnding, config?.FontFamily, config?.FontSize, config?.ForegroundColor, config?.BackgroundColor, config?.BellNotification, config?.ResetScrollOnUserInput ?? true, config?.ResetScrollOnServerOutput ?? false, config?.BackspaceKey);
         
         if (connection.IsConnected)
         {
@@ -266,6 +266,7 @@ public partial class TerminalTabItem : TabItem
         SessionConfig.TerminalResizeMethod = config.TerminalResizeMethod;
         SessionConfig.ResetScrollOnUserInput = config.ResetScrollOnUserInput;
         SessionConfig.ResetScrollOnServerOutput = config.ResetScrollOnServerOutput;
+        SessionConfig.BackspaceKey = config.BackspaceKey;
         
         TerminalControl.UpdateSettings(
             config.LineEnding,
@@ -275,7 +276,8 @@ public partial class TerminalTabItem : TabItem
             config.BackgroundColor,
             config.BellNotification,
             config.ResetScrollOnUserInput,
-            config.ResetScrollOnServerOutput);
+            config.ResetScrollOnServerOutput,
+            config.BackspaceKey);
         
         ApplyColor(config.Color);
     }

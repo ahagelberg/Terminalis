@@ -13,10 +13,10 @@
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
-        <Canvas x:Name="TerminalCanvas" 
+            <Canvas x:Name="TerminalCanvas" 
                 Grid.Column="0"
-                Background="Black"
-                Focusable="False"
+                    Background="Black"
+                    Focusable="False"
                 ClipToBounds="True"
                 IsHitTestVisible="True"/>
         <ScrollBar x:Name="TerminalScrollBar"

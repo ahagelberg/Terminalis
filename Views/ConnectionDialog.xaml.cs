@@ -112,6 +112,13 @@ public partial class ConnectionDialog : Window
             _ => 0
         };
         
+        BackspaceKeyComboBox.SelectedIndex = existingConfig.BackspaceKey switch
+        {
+            "DEL" => 0,
+            "CtrlH" => 1,
+            _ => 0
+        };
+        
         if (existingConfig.PortForwardingRules != null && existingConfig.PortForwardingRules.Count > 0)
         {
             var collection = PortForwardingDataGrid.ItemsSource as ObservableCollection<PortForwardingRule>;
@@ -339,7 +346,8 @@ public partial class ConnectionDialog : Window
             FontFamily = string.IsNullOrWhiteSpace(FontFamilyComboBox.Text) ? "Consolas" : FontFamilyComboBox.Text,
                 FontSize = double.TryParse(FontSizeTextBox.Text, out double fontSize) && fontSize > 0 ? fontSize : 12.0,
             ForegroundColor = _selectedForegroundColor,
-            BackgroundColor = _selectedBackgroundColor
+            BackgroundColor = _selectedBackgroundColor,
+            BackspaceKey = BackspaceKeyComboBox.SelectedItem is ComboBoxItem backspaceItem && backspaceItem.Tag is string backspaceTag ? backspaceTag : "DEL"
         };
 
         DialogResult = true;

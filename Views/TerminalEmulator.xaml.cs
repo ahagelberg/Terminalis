@@ -40,6 +40,7 @@ public partial class TerminalEmulator : UserControl
     private bool _resetScrollOnUserInput = true;
     private bool _resetScrollOnServerOutput = false;
     private DateTime _lastInputSentTime = DateTime.MinValue;
+    private string _backspaceKey = "DEL";
 
     public TerminalEmulator()
     {
@@ -66,7 +67,7 @@ public partial class TerminalEmulator : UserControl
         _renderTimer.Tick += RenderTimer_Tick;
     }
 
-    public void AttachConnection(ITerminalConnection connection, string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool resetScrollOnUserInput = true, bool resetScrollOnServerOutput = false)
+    public void AttachConnection(ITerminalConnection connection, string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool resetScrollOnUserInput = true, bool resetScrollOnServerOutput = false, string? backspaceKey = null)
     {
         if (_connection != null)
         {
@@ -81,6 +82,7 @@ public partial class TerminalEmulator : UserControl
         _bellNotification = bellNotification ?? "Line Flash";
         _resetScrollOnUserInput = resetScrollOnUserInput;
         _resetScrollOnServerOutput = resetScrollOnServerOutput;
+        _backspaceKey = backspaceKey ?? "DEL";
 
         if (_emulator != null)
         {
@@ -176,7 +178,7 @@ public partial class TerminalEmulator : UserControl
         _fontSize = fontSize;
     }
 
-    public void UpdateSettings(string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool? resetScrollOnUserInput = null, bool? resetScrollOnServerOutput = null)
+    public void UpdateSettings(string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool? resetScrollOnUserInput = null, bool? resetScrollOnServerOutput = null, string? backspaceKey = null)
     {
         bool fontChanged = false;
         
@@ -228,6 +230,11 @@ public partial class TerminalEmulator : UserControl
         if (resetScrollOnServerOutput.HasValue)
         {
             _resetScrollOnServerOutput = resetScrollOnServerOutput.Value;
+        }
+        
+        if (backspaceKey != null)
+        {
+            _backspaceKey = backspaceKey;
         }
         
         if (fontChanged)
@@ -707,7 +714,7 @@ public partial class TerminalEmulator : UserControl
             var doubleUnderline = cell.DoubleUnderline;
             var overline = cell.Overline;
             var conceal = cell.Conceal;
-            
+
             if (fg != currentFg || bg != currentBg || bold != currentBold || italic != currentItalic || 
                 underline != currentUnderline || faint != currentFaint || crossedOut != currentCrossedOut ||
                 doubleUnderline != currentDoubleUnderline || overline != currentOverline || conceal != currentConceal || col == _emulator.Cols - 1)
@@ -839,8 +846,8 @@ public partial class TerminalEmulator : UserControl
                     var charForeground = cellIsSelected ? background : foreground;
                     var charBackground = cellIsSelected ? foreground : background;
 
-                    if (conceal)
-                    {
+        if (conceal)
+        {
                         charForeground = charBackground;
                     }
                     else if (faint && charForeground is SolidColorBrush fgBrush)
@@ -1094,7 +1101,7 @@ public partial class TerminalEmulator : UserControl
                 if (_hasSelection && !_isSelecting)
                 {
                     CopySelectionToClipboard();
-                    ClearSelection();
+            ClearSelection();
                     _hasSelection = false;
                 }
                 
@@ -1145,8 +1152,8 @@ public partial class TerminalEmulator : UserControl
             if (pos.X >= 0 && pos.Y >= 0 && pos.X <= TerminalCanvas.ActualWidth && pos.Y <= TerminalCanvas.ActualHeight)
             {
                 if (!_isSelecting && !_hasSelection)
-                {
-                    PasteFromClipboard();
+            {
+                PasteFromClipboard();
                 }
                 e.Handled = true;
             }
@@ -1171,7 +1178,7 @@ public partial class TerminalEmulator : UserControl
         // Prevent context menu from opening in terminal area
         e.Handled = true;
     }
-    
+
     private void TerminalEmulator_PreviewMouseMove(object sender, MouseEventArgs e)
     {
         // Don't handle mouse move over the scrollbar or its parts
@@ -1216,7 +1223,7 @@ public partial class TerminalEmulator : UserControl
             Cursor = Cursors.IBeam;
         }
     }
-    
+
     private void TerminalEmulator_PreviewMouseUp(object sender, MouseButtonEventArgs e)
     {
         if (e.LeftButton == MouseButtonState.Released && _isSelecting)
@@ -1237,7 +1244,7 @@ public partial class TerminalEmulator : UserControl
                 if (endRow > startRow || (endRow == startRow && endCol > startCol))
                 {
                     _hasSelection = true;
-                }
+            }
                 else
                 {
                     // Just a click, clear selection
@@ -1258,20 +1265,23 @@ public partial class TerminalEmulator : UserControl
         _selectionEndCol = null;
         _hasSelection = false;
     }
-    
+
     private void SelectWordAt(int row, int col)
     {
         if (_emulator == null) return;
         
         TerminalCell cell;
-        if (row < _emulator.Rows)
+        // Unified buffer: rows 0 to (ScrollbackCount-1) are scrollback, rows ScrollbackCount to (ScrollbackCount+Rows-1) are current screen
+        if (row < _emulator.ScrollbackLineCount)
         {
-            cell = _emulator.GetCell(row, col);
+            // This is scrollback
+            cell = _emulator.GetScrollbackCell(row, col);
         }
         else
         {
-            var scrollbackRow = row - _emulator.Rows;
-            cell = _emulator.GetScrollbackCell(scrollbackRow, col);
+            // This is current screen
+            var screenRow = row - _emulator.ScrollbackLineCount;
+            cell = _emulator.GetCell(screenRow, col);
         }
         
         // Check if we're on a word character (non-whitespace)
@@ -1286,14 +1296,14 @@ public partial class TerminalEmulator : UserControl
             while (startCol > 0)
             {
                 TerminalCell leftCell;
-                if (row < _emulator.Rows)
+                if (row < _emulator.ScrollbackLineCount)
                 {
-                    leftCell = _emulator.GetCell(row, startCol - 1);
+                    leftCell = _emulator.GetScrollbackCell(row, startCol - 1);
                 }
                 else
                 {
-                    var scrollbackRow = row - _emulator.Rows;
-                    leftCell = _emulator.GetScrollbackCell(scrollbackRow, startCol - 1);
+                    var screenRow = row - _emulator.ScrollbackLineCount;
+                    leftCell = _emulator.GetCell(screenRow, startCol - 1);
                 }
                 
                 if (char.IsWhiteSpace(leftCell.Character))
@@ -1307,14 +1317,14 @@ public partial class TerminalEmulator : UserControl
             while (endCol < _emulator.Cols - 1)
             {
                 TerminalCell rightCell;
-                if (row < _emulator.Rows)
+                if (row < _emulator.ScrollbackLineCount)
                 {
-                    rightCell = _emulator.GetCell(row, endCol + 1);
+                    rightCell = _emulator.GetScrollbackCell(row, endCol + 1);
                 }
                 else
                 {
-                    var scrollbackRow = row - _emulator.Rows;
-                    rightCell = _emulator.GetScrollbackCell(scrollbackRow, endCol + 1);
+                    var screenRow = row - _emulator.ScrollbackLineCount;
+                    rightCell = _emulator.GetCell(screenRow, endCol + 1);
                 }
                 
                 if (char.IsWhiteSpace(rightCell.Character))
@@ -1404,14 +1414,17 @@ public partial class TerminalEmulator : UserControl
             for (int col = rowStartCol; col < rowEndCol && col < _emulator.Cols; col++)
             {
                 TerminalCell cell;
-                if (row < _emulator.Rows)
+                // Unified buffer: rows 0 to (ScrollbackCount-1) are scrollback, rows ScrollbackCount to (ScrollbackCount+Rows-1) are current screen
+                if (row < _emulator.ScrollbackLineCount)
                 {
-                    cell = _emulator.GetCell(row, col);
+                    // This is scrollback
+                    cell = _emulator.GetScrollbackCell(row, col);
                 }
                 else
                 {
-                    var scrollbackRow = row - _emulator.Rows;
-                    cell = _emulator.GetScrollbackCell(scrollbackRow, col);
+                    // This is current screen
+                    var screenRow = row - _emulator.ScrollbackLineCount;
+                    cell = _emulator.GetCell(screenRow, col);
                 }
                 lineText.Append(cell.Character);
             }
@@ -1618,7 +1631,7 @@ public partial class TerminalEmulator : UserControl
         }
         else if (key == Key.Back)
         {
-            sequence = "\b";
+            sequence = _backspaceKey == "CtrlH" ? "\b" : "\x7F";
             e.Handled = true;
         }
         else if (key == Key.Tab)
@@ -1874,8 +1887,8 @@ public partial class TerminalEmulator : UserControl
             UpdateScrollBar();
             UpdateCanvasTransform();
             // Render immediately for responsive scrolling, don't throttle
-            RenderScreen();
-        }
+        RenderScreen();
+    }
         e.Handled = true;
     }
     

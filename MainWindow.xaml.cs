@@ -277,6 +277,7 @@ public partial class MainWindow : Window
                 sshConfig.FontSize = newConfig.FontSize;
                 sshConfig.ForegroundColor = newConfig.ForegroundColor;
                 sshConfig.BackgroundColor = newConfig.BackgroundColor;
+                sshConfig.BackspaceKey = newConfig.BackspaceKey;
                 _sessionManager.UpdateSession(sshConfig);
                 SessionManagerPanel.RefreshAfterEdit();
             }
@@ -296,7 +297,12 @@ public partial class MainWindow : Window
             }
 
             var connection = ConnectionFactory.CreateConnection(config);
-            connection.ErrorOccurred += OnErrorOccurred;
+            string? lastError = null;
+            connection.ErrorOccurred += (sender, error) =>
+            {
+                lastError = error;
+                OnErrorOccurred(sender, error);
+            };
 
             var tab = new TerminalTabItem();
             TerminalTabs.Items.Add(tab);
@@ -317,13 +323,17 @@ public partial class MainWindow : Window
             {
                 TerminalTabs.Items.Remove(tab);
                 StatusTextBlock.Text = "Connection failed";
-                ShowNotification($"Failed to connect to {config.Name}", NotificationType.Error);
+                var errorMessage = string.IsNullOrEmpty(lastError) 
+                    ? $"Failed to connect to {config.Name}" 
+                    : $"Failed to connect to {config.Name}: {lastError}";
+                ShowNotification(errorMessage, NotificationType.Error);
                 connection.Dispose();
             }
         }
         catch (Exception ex)
         {
             StatusTextBlock.Text = $"Error: {ex.Message}";
+            ShowNotification($"Failed to connect to {config.Name}: {ex.Message}", NotificationType.Error);
             MessageBox.Show($"Failed to connect: {ex.Message}", "Connection Error", 
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
@@ -613,7 +623,12 @@ public partial class MainWindow : Window
         try
         {
             var connection = ConnectionFactory.CreateConnection(config);
-            connection.ErrorOccurred += OnErrorOccurred;
+            string? lastError = null;
+            connection.ErrorOccurred += (sender, error) =>
+            {
+                lastError = error;
+                OnErrorOccurred(sender, error);
+            };
 
             tab.AttachConnection(connection, config.Color, config);
             
@@ -634,7 +649,10 @@ public partial class MainWindow : Window
                     tab.UpdateStatusIndicator(ConnectionStatus.Error);
                 }));
                 StatusTextBlock.Text = "Reconnection failed";
-                ShowNotification($"Failed to reconnect to {config.Name}", NotificationType.Error);
+                var errorMessage = string.IsNullOrEmpty(lastError) 
+                    ? $"Failed to reconnect to {config.Name}" 
+                    : $"Failed to reconnect to {config.Name}: {lastError}";
+                ShowNotification(errorMessage, NotificationType.Error);
             }
         }
         catch (Exception ex)

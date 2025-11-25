@@ -42,6 +42,7 @@ public class SshSessionConfiguration : SessionConfiguration
     public bool ResetScrollOnUserInput { get; set; } = true;
     public bool ResetScrollOnServerOutput { get; set; } = false;
     public string? ScreenSessionName { get; set; }
+    public string BackspaceKey { get; set; } = "DEL";
 
     public SshSessionConfiguration()
     {
