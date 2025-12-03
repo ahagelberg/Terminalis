@@ -297,6 +297,8 @@ public class AnsiParser
         {
             if (c == '\\')
             {
+                var oscString = _buffer.ToString();
+                EmitOscCommand(oscString);
                 _state = AnsiState.Normal;
                 _oscEscSeen = false;
                 _buffer.Clear();
@@ -310,6 +312,8 @@ public class AnsiParser
         }
         else if (c == 0x07)
         {
+            var oscString = _buffer.ToString();
+            EmitOscCommand(oscString);
             _state = AnsiState.Normal;
             _buffer.Clear();
         }
@@ -323,6 +327,8 @@ public class AnsiParser
         }
         else if (c == '\r' || c == '\n')
         {
+            var oscString = _buffer.ToString();
+            EmitOscCommand(oscString);
             _state = AnsiState.Normal;
             _buffer.Clear();
         }
@@ -331,6 +337,30 @@ public class AnsiParser
             _state = AnsiState.Normal;
             _buffer.Clear();
         }
+    }
+
+    private void EmitOscCommand(string oscString)
+    {
+        if (string.IsNullOrEmpty(oscString))
+        {
+            return;
+        }
+        var command = new AnsiCommand
+        {
+            Type = AnsiCommandType.Osc,
+            Parameters = new List<int>(),
+            OscString = oscString
+        };
+        var parts = oscString.Split(';', 2);
+        if (parts.Length > 0 && int.TryParse(parts[0], out int oscCode))
+        {
+            command.Parameters.Add(oscCode);
+        }
+        else
+        {
+            command.Parameters.Add(0);
+        }
+        CommandReceived?.Invoke(this, command);
     }
 
     private void ProcessDcsCharacter(char c)
@@ -476,6 +506,7 @@ public class AnsiCommand
     public List<int> Parameters { get; set; } = new();
     public char FinalChar { get; set; }
     public bool IsPrivate { get; set; }
+    public string? OscString { get; set; }
 }
 
 public enum AnsiCommandType

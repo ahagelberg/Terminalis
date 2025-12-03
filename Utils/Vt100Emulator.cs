@@ -71,6 +71,7 @@ public class Vt100Emulator
     public event EventHandler? ScreenChanged;
     public event EventHandler? CursorMoved;
     public event EventHandler? Bell;
+    public event EventHandler<string>? TitleChanged;
 
     public Vt100Emulator()
     {
@@ -215,6 +216,37 @@ public class Vt100Emulator
         {
             ProcessSingleCharCommand(command);
         }
+        else if (command.Type == AnsiCommandType.Osc)
+        {
+            ProcessOscCommand(command);
+        }
+    }
+
+    private void ProcessOscCommand(AnsiCommand command)
+    {
+        if (command.Parameters.Count == 0 || string.IsNullOrEmpty(command.OscString))
+        {
+            return;
+        }
+
+        int oscCode = command.Parameters[0];
+        string oscString = command.OscString;
+
+        switch (oscCode)
+        {
+            case 0:
+            case 2:
+                if (oscString.Contains(';'))
+                {
+                    var parts = oscString.Split(';', 2);
+                    if (parts.Length > 1)
+                    {
+                        string title = parts[1];
+                        TitleChanged?.Invoke(this, title);
+                    }
+                }
+                break;
+        }
     }
 
     private void ProcessSingleCharCommand(AnsiCommand command)
@@ -274,6 +306,10 @@ public class Vt100Emulator
             case 'f':
                 var targetRow = p.Count > 0 && p[0] > 0 ? p[0] - 1 : 0;
                 var targetCol = p.Count > 1 && p[1] > 0 ? p[1] - 1 : 0;
+                if (targetRow >= _rows)
+                {
+                    targetRow = _rows - 1;
+                }
                 MoveCursor(targetRow, targetCol);
                 break;
             case 'J':
@@ -637,8 +673,10 @@ public class Vt100Emulator
     {
         _scrollTop = Math.Max(0, Math.Min(top, _rows - 1));
         _scrollBottom = Math.Max(_scrollTop, Math.Min(bottom, _rows - 1));
-        _cursorRow = Math.Max(_scrollTop, Math.Min(_cursorRow, _scrollBottom));
-        EnsureCursorInBounds();
+        _cursorRow = _scrollTop;
+        _cursorCol = 0;
+        CursorMoved?.Invoke(this, EventArgs.Empty);
+        ScreenChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void ScrollDown(int n)
