@@ -1,0 +1,13 @@
+# Future improvements #
+- MQTT monitor functions
+- Server monitoring options (CPU load, ram, disk, etc.)
+- Support for SSH gateways (double logins)
+- Tunnel tool to create tunnels for multiple ports through multiple layers of machines
+- Detect when running in a screen and indicate it visually
+- Scratchpad for copy-paste and common commands.
+- Search function
+- Share settings easily
+- Reconnect all button
+- Add option to return to path on reconnect
+- Line wrapping
+- Prevent scrolling display if scrolled up and more input is coming in
