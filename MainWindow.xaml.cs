@@ -56,6 +56,7 @@ public partial class MainWindow : Window
         SessionManagerPanel.SessionEditRequested += SessionManagerPanel_SessionEditRequested;
         
         StateChanged += MainWindow_StateChanged;
+        Activated += MainWindow_Activated;
         
         LoadWindowState();
     }
@@ -65,6 +66,18 @@ public partial class MainWindow : Window
         if (MaximizeButton != null)
         {
             MaximizeButton.Content = WindowState == System.Windows.WindowState.Maximized ? "2" : "1";
+        }
+    }
+
+    private async void MainWindow_Activated(object? sender, EventArgs e)
+    {
+        if (TerminalTabs.SelectedItem is TerminalTabItem activeTab && 
+            activeTab.Connection != null && !activeTab.Connection.IsConnected && 
+            activeTab.SessionConfig != null &&
+            (activeTab.SessionConfig.AutoReconnectMode == AutoReconnectMode.OnFocus || 
+             activeTab.SessionConfig.AutoReconnectMode == AutoReconnectMode.OnDisconnect))
+        {
+            await activeTab.ReconnectAsync();
         }
     }
 
@@ -133,7 +146,7 @@ public partial class MainWindow : Window
         
         for (int i = 0; i < TerminalTabs.Items.Count; i++)
         {
-            if (TerminalTabs.Items[i] is TerminalTabItem tab && tab.SessionConfig != null && tab.Connection?.IsConnected == true)
+            if (TerminalTabs.Items[i] is TerminalTabItem tab && tab.SessionConfig != null)
             {
                 activeSessions.Add(new ActiveSessionInfo
                 {
@@ -159,28 +172,45 @@ public partial class MainWindow : Window
         
         foreach (var sessionInfo in orderedSessions)
         {
-            var session = _sessionManager.GetSession(sessionInfo.SessionId);
-            if (session is SshSessionConfiguration sshConfig)
+            try
             {
-                var existingSession = _sessionManager.GetSession(sshConfig.Id);
-                if (existingSession == null && !string.IsNullOrEmpty(sshConfig.Name))
+                var session = _sessionManager.GetSession(sessionInfo.SessionId);
+                if (session is SshSessionConfiguration sshConfig)
                 {
-                    _sessionManager.AddSession(sshConfig);
+                    if (!string.IsNullOrEmpty(sshConfig.Name))
+                    {
+                        var existingSession = _sessionManager.GetSession(sshConfig.Id);
+                        if (existingSession == null)
+                        {
+                            _sessionManager.AddSession(sshConfig);
+                        }
+                    }
+
+                    var connection = ConnectionFactory.CreateConnection(sshConfig, _knownHostsManager, ShowHostKeyVerificationDialog);
+                    string? lastError = null;
+                    connection.ErrorOccurred += (sender, error) =>
+                    {
+                        lastError = error;
+                        OnErrorOccurred(sender, error);
+                    };
+
+                    var tab = new TerminalTabItem();
+                    await Dispatcher.InvokeAsync(() =>
+                    {
+                        TerminalTabs.Items.Add(tab);
+                    });
+                    tab.AttachConnection(connection, sshConfig.Color, sshConfig);
+                    
+                    tabs.Add((tab, sshConfig, connection));
                 }
-
-                var connection = ConnectionFactory.CreateConnection(sshConfig, _knownHostsManager, ShowHostKeyVerificationDialog);
-                string? lastError = null;
-                connection.ErrorOccurred += (sender, error) =>
+                else if (session == null)
                 {
-                    lastError = error;
-                    OnErrorOccurred(sender, error);
-                };
-
-                var tab = new TerminalTabItem();
-                TerminalTabs.Items.Add(tab);
-                tab.AttachConnection(connection, sshConfig.Color, sshConfig);
-                
-                tabs.Add((tab, sshConfig, connection));
+                    System.Diagnostics.Debug.WriteLine($"Session with ID {sessionInfo.SessionId} not found in session manager, skipping restore.");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error restoring session {sessionInfo.SessionId}: {ex.Message}");
             }
         }
         
@@ -196,22 +226,32 @@ public partial class MainWindow : Window
                     var connected = await item.connection.ConnectAsync();
                     if (connected)
                     {
-                        item.tab.SetConnected();
+                        await Dispatcher.InvokeAsync(() =>
+                        {
+                            item.tab.SetConnected();
+                        });
                     }
                     else
                     {
                         await Dispatcher.InvokeAsync(() =>
                         {
-                            TerminalTabs.Items.Remove(item.tab);
+                            if (TerminalTabs.Items.Contains(item.tab))
+                            {
+                                TerminalTabs.Items.Remove(item.tab);
+                            }
                             item.connection.Dispose();
                         });
                     }
                 }
                 catch (Exception ex)
                 {
+                    System.Diagnostics.Debug.WriteLine($"Error connecting session {item.config.Id}: {ex.Message}");
                     await Dispatcher.InvokeAsync(() =>
                     {
-                        TerminalTabs.Items.Remove(item.tab);
+                        if (TerminalTabs.Items.Contains(item.tab))
+                        {
+                            TerminalTabs.Items.Remove(item.tab);
+                        }
                         item.connection.Dispose();
                     });
                 }
@@ -340,6 +380,7 @@ public partial class MainWindow : Window
                 sshConfig.ForegroundColor = newConfig.ForegroundColor;
                 sshConfig.BackgroundColor = newConfig.BackgroundColor;
                 sshConfig.BackspaceKey = newConfig.BackspaceKey;
+                sshConfig.AutoReconnectMode = newConfig.AutoReconnectMode;
                 _sessionManager.UpdateSession(sshConfig);
                 SessionManagerPanel.RefreshAfterEdit();
             }
@@ -463,13 +504,20 @@ public partial class MainWindow : Window
         Close();
     }
 
-    private void TerminalTabs_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    private async void TerminalTabs_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (TerminalTabs.SelectedItem is TerminalTabItem tab && tab.Connection != null)
         {
             StatusTextBlock.Text = tab.Connection.IsConnected 
                 ? $"Connected to {tab.ConnectionName}" 
                 : $"{tab.ConnectionName} (Disconnected)";
+            
+            if (!tab.Connection.IsConnected && tab.SessionConfig != null && 
+                (tab.SessionConfig.AutoReconnectMode == AutoReconnectMode.OnFocus || 
+                 tab.SessionConfig.AutoReconnectMode == AutoReconnectMode.OnDisconnect))
+            {
+                await tab.ReconnectAsync();
+            }
         }
         else
         {
