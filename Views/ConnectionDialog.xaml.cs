@@ -38,10 +38,12 @@ public partial class ConnectionDialog : Window
 {
     public SshSessionConfiguration? Configuration { get; private set; }
     public bool IsLiveEditMode { get; private set; }
+    private Services.SessionManager? _sessionManager;
 
-    public ConnectionDialog()
+    public ConnectionDialog(Services.SessionManager? sessionManager = null)
     {
         InitializeComponent();
+        _sessionManager = sessionManager;
         PortForwardingDataGrid.ItemsSource = new ObservableCollection<PortForwardingRule>();
         PasswordAuthRadio_Checked(null, null);
         NameTextBox.Focus();
@@ -53,10 +55,11 @@ public partial class ConnectionDialog : Window
         Loaded += (s, e) =>
         {
             UpdateColorBoxes();
+            LoadGatewaySessions();
         };
     }
 
-    public ConnectionDialog(SshSessionConfiguration existingConfig, bool liveEditMode = false) : this()
+    public ConnectionDialog(SshSessionConfiguration existingConfig, bool liveEditMode = false, Services.SessionManager? sessionManager = null) : this(sessionManager)
     {
         NameTextBox.Text = existingConfig.Name;
         HostTextBox.Text = existingConfig.Host;
@@ -186,6 +189,33 @@ public partial class ConnectionDialog : Window
     private string? _selectedForegroundColor;
     private string? _selectedBackgroundColor;
     private string? _selectedAccentColor;
+
+    private void LoadGatewaySessions()
+    {
+        if (_sessionManager != null && GatewaySessionComboBox != null)
+        {
+            var sessions = new List<object>();
+            sessions.Add(new { Id = (string?)null, Name = "(None)" });
+            
+            var sshSessions = _sessionManager.Sessions
+                .OfType<SshSessionConfiguration>()
+                .Where(s => s.Id != _existingConfig?.Id)
+                .OrderBy(s => s.Name)
+                .ToList();
+            
+            sessions.AddRange(sshSessions);
+            GatewaySessionComboBox.ItemsSource = sessions;
+            
+            if (_existingConfig?.GatewaySessionId != null)
+            {
+                GatewaySessionComboBox.SelectedValue = _existingConfig.GatewaySessionId;
+            }
+            else
+            {
+                GatewaySessionComboBox.SelectedValue = null;
+            }
+        }
+    }
 
     private void PasswordAuthRadio_Checked(object? sender, RoutedEventArgs? e)
     {
@@ -362,7 +392,10 @@ public partial class ConnectionDialog : Window
                 1 => AutoReconnectMode.OnDisconnect,
                 2 => AutoReconnectMode.OnFocus,
                 _ => AutoReconnectMode.None
-            }
+            },
+            GatewaySessionId = GatewaySessionComboBox?.SelectedValue == null || GatewaySessionComboBox.SelectedValue.ToString() == "(None)" 
+                ? null 
+                : GatewaySessionComboBox.SelectedValue.ToString()
         };
 
         DialogResult = true;

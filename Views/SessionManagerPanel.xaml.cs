@@ -218,7 +218,7 @@ public partial class SessionManagerPanel : UserControl
 
     private void NewSessionButton_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new ConnectionDialog
+        var dialog = new ConnectionDialog(_sessionManager)
         {
             Owner = Window.GetWindow(this)
         };

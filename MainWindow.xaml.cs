@@ -186,7 +186,7 @@ public partial class MainWindow : Window
                         }
                     }
 
-                    var connection = ConnectionFactory.CreateConnection(sshConfig, _knownHostsManager, ShowHostKeyVerificationDialog);
+                    var connection = ConnectionFactory.CreateConnection(sshConfig, _knownHostsManager, ShowHostKeyVerificationDialog, _sessionManager);
                     string? lastError = null;
                     connection.ErrorOccurred += (sender, error) =>
                     {
@@ -324,7 +324,7 @@ public partial class MainWindow : Window
 
     internal async void NewTabMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new ConnectionDialog
+        var dialog = new ConnectionDialog(_sessionManager)
         {
             Owner = this
         };
@@ -347,7 +347,7 @@ public partial class MainWindow : Window
     {
         if (session is SshSessionConfiguration sshConfig)
         {
-            var dialog = new ConnectionDialog(sshConfig)
+            var dialog = new ConnectionDialog(sshConfig, false, _sessionManager)
             {
                 Owner = this
             };
@@ -381,6 +381,7 @@ public partial class MainWindow : Window
                 sshConfig.BackgroundColor = newConfig.BackgroundColor;
                 sshConfig.BackspaceKey = newConfig.BackspaceKey;
                 sshConfig.AutoReconnectMode = newConfig.AutoReconnectMode;
+                sshConfig.GatewaySessionId = newConfig.GatewaySessionId;
                 _sessionManager.UpdateSession(sshConfig);
                 SessionManagerPanel.RefreshAfterEdit();
             }
@@ -399,7 +400,7 @@ public partial class MainWindow : Window
                 _sessionManager.AddSession(config);
             }
 
-            var connection = ConnectionFactory.CreateConnection(config, _knownHostsManager, ShowHostKeyVerificationDialog);
+            var connection = ConnectionFactory.CreateConnection(config, _knownHostsManager, ShowHostKeyVerificationDialog, _sessionManager);
             string? lastError = null;
             connection.ErrorOccurred += (sender, error) =>
             {
@@ -732,7 +733,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            var connection = ConnectionFactory.CreateConnection(config, _knownHostsManager, ShowHostKeyVerificationDialog);
+            var connection = ConnectionFactory.CreateConnection(config, _knownHostsManager, ShowHostKeyVerificationDialog, _sessionManager);
             string? lastError = null;
             connection.ErrorOccurred += (sender, error) =>
             {

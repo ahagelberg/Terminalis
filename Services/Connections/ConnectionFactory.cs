@@ -5,16 +5,16 @@ namespace TabbySSH.Services.Connections;
 
 public static class ConnectionFactory
 {
-    public static ITerminalConnection CreateConnection(SessionConfiguration config, KnownHostsManager? knownHostsManager = null, HostKeyVerificationCallback? hostKeyVerificationCallback = null)
+    public static ITerminalConnection CreateConnection(SessionConfiguration config, KnownHostsManager? knownHostsManager = null, HostKeyVerificationCallback? hostKeyVerificationCallback = null, Services.SessionManager? sessionManager = null)
     {
         return config switch
         {
-            SshSessionConfiguration sshConfig => CreateSshConnection(sshConfig, knownHostsManager, hostKeyVerificationCallback),
+            SshSessionConfiguration sshConfig => CreateSshConnection(sshConfig, knownHostsManager, hostKeyVerificationCallback, sessionManager),
             _ => throw new NotSupportedException($"Connection type '{config.ConnectionType}' is not supported")
         };
     }
 
-    private static ITerminalConnection CreateSshConnection(SshSessionConfiguration config, KnownHostsManager? knownHostsManager, HostKeyVerificationCallback? hostKeyVerificationCallback)
+    private static ITerminalConnection CreateSshConnection(SshSessionConfiguration config, KnownHostsManager? knownHostsManager, HostKeyVerificationCallback? hostKeyVerificationCallback, Services.SessionManager? sessionManager)
     {
         if (string.IsNullOrWhiteSpace(config.Host))
         {
@@ -38,7 +38,17 @@ public static class ConnectionFactory
             throw new ArgumentException("Private key path is required for key authentication", nameof(config));
         }
 
-        return new SshConnection(config, knownHostsManager, hostKeyVerificationCallback);
+        SshSessionConfiguration? gatewayConfig = null;
+        if (!string.IsNullOrWhiteSpace(config.GatewaySessionId) && sessionManager != null)
+        {
+            var gatewaySession = sessionManager.GetSession(config.GatewaySessionId);
+            if (gatewaySession is SshSessionConfiguration sshGateway)
+            {
+                gatewayConfig = sshGateway;
+            }
+        }
+
+        return new SshConnection(config, knownHostsManager, hostKeyVerificationCallback, gatewayConfig);
     }
 }
 

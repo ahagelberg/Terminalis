@@ -44,6 +44,7 @@ public class SshSessionConfiguration : SessionConfiguration
     public string? ScreenSessionName { get; set; }
     public string BackspaceKey { get; set; } = "DEL";
     public AutoReconnectMode AutoReconnectMode { get; set; } = AutoReconnectMode.OnFocus;
+    public string? GatewaySessionId { get; set; }
 
     public SshSessionConfiguration()
     {

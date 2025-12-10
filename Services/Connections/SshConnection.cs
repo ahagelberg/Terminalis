@@ -1,8 +1,11 @@
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using Renci.SshNet;
 using Renci.SshNet.Common;
 using TabbySSH.Models;
@@ -26,7 +29,11 @@ public class SshConnection : ITerminalConnection
 
     private SshClient? _sshClient;
     private ShellStream? _shellStream;
+    private SshClient? _gatewayClient;
+    private ForwardedPortLocal? _gatewayForward;
+    private int _gatewayLocalPort;
     private readonly SshSessionConfiguration _config;
+    private readonly SshSessionConfiguration? _gatewayConfig;
     private readonly string _host;
     private readonly int _port;
     private readonly string _username;
@@ -35,16 +42,30 @@ public class SshConnection : ITerminalConnection
     private readonly KnownHostsManager? _knownHostsManager;
     private readonly HostKeyVerificationCallback? _hostKeyVerificationCallback;
 
-    public bool IsConnected => _sshClient?.IsConnected ?? false;
+    public bool IsConnected
+    {
+        get
+        {
+            try
+            {
+                return _sshClient?.IsConnected ?? false;
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+        }
+    }
     public string ConnectionName => _connectionName;
 
     public event EventHandler<string>? DataReceived;
     public event EventHandler<ConnectionClosedEventArgs>? ConnectionClosed;
     public event EventHandler<string>? ErrorOccurred;
 
-    public SshConnection(SshSessionConfiguration config, KnownHostsManager? knownHostsManager = null, HostKeyVerificationCallback? hostKeyVerificationCallback = null)
+    public SshConnection(SshSessionConfiguration config, KnownHostsManager? knownHostsManager = null, HostKeyVerificationCallback? hostKeyVerificationCallback = null, SshSessionConfiguration? gatewayConfig = null)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
+        _gatewayConfig = gatewayConfig;
         _host = config.Host ?? throw new ArgumentNullException(nameof(config.Host));
         _port = config.Port > 0 ? config.Port : DEFAULT_SSH_PORT;
         _username = config.Username ?? throw new ArgumentNullException(nameof(config.Username));
@@ -58,6 +79,19 @@ public class SshConnection : ITerminalConnection
     {
         try
         {
+            string targetHost = _host;
+            int targetPort = _port;
+
+            if (_gatewayConfig != null)
+            {
+                if (!await ConnectToGatewayAsync())
+                {
+                    return false;
+                }
+                targetHost = "localhost";
+                targetPort = _gatewayLocalPort;
+            }
+
             AuthenticationMethod authMethod;
             if (_config.UsePasswordAuthentication)
             {
@@ -82,7 +116,7 @@ public class SshConnection : ITerminalConnection
                 return false;
             }
 
-            var connectionInfo = new ConnectionInfo(_host, _port, _username, authMethod)
+            var connectionInfo = new ConnectionInfo(targetHost, targetPort, _username, authMethod)
             {
                 Timeout = TimeSpan.FromSeconds(_config.ConnectionTimeout > 0 ? _config.ConnectionTimeout : CONNECTION_TIMEOUT_SECONDS)
             };
@@ -178,7 +212,21 @@ public class SshConnection : ITerminalConnection
 
             try
             {
-                await Task.Run(() => _sshClient.Connect());
+                var timeout = TimeSpan.FromSeconds(_config.ConnectionTimeout > 0 ? _config.ConnectionTimeout : CONNECTION_TIMEOUT_SECONDS);
+                var connectTask = Task.Run(() =>
+                {
+                    _sshClient.Connect();
+                });
+                
+                if (await Task.WhenAny(connectTask, Task.Delay(timeout)) != connectTask)
+                {
+                    _sshClient?.Disconnect();
+                    _sshClient?.Dispose();
+                    _sshClient = null;
+                    throw new SshConnectionException($"Connection timeout after {timeout.TotalSeconds} seconds");
+                }
+                
+                await connectTask;
             }
             catch (SshConnectionException ex)
             {
@@ -223,9 +271,14 @@ public class SshConnection : ITerminalConnection
 
             return false;
         }
-        catch (Exception ex)
+        catch (SshConnectionException ex)
         {
             ErrorOccurred?.Invoke(this, ex.Message);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            ErrorOccurred?.Invoke(this, $"Connection error: {ex.Message}");
             return false;
         }
     }
@@ -413,12 +466,18 @@ public class SshConnection : ITerminalConnection
         {
             _shellStream?.Close();
             _sshClient?.Disconnect();
+            _gatewayForward?.Stop();
+            _gatewayClient?.Disconnect();
         });
 
         _shellStream?.Dispose();
         _sshClient?.Dispose();
+        _gatewayForward?.Dispose();
+        _gatewayClient?.Dispose();
         _shellStream = null;
         _sshClient = null;
+        _gatewayForward = null;
+        _gatewayClient = null;
     }
 
     public async Task WriteAsync(string data)
@@ -427,8 +486,6 @@ public class SshConnection : ITerminalConnection
         {
             return;
         }
-
-        System.Console.WriteLine($"[Client] Raw data sent: {EscapeString(data)}");
 
         if (_shellStream == null || !IsConnected)
         {
@@ -453,9 +510,6 @@ public class SshConnection : ITerminalConnection
         {
             return;
         }
-
-        var dataString = Encoding.UTF8.GetString(data);
-        System.Console.WriteLine($"[Client] Raw data sent (bytes): {EscapeString(dataString)}");
 
         if (_shellStream == null || !IsConnected)
         {
@@ -501,13 +555,11 @@ public class SshConnection : ITerminalConnection
                                 var sendMethod = channelType.GetMethod("SendWindowChangeRequest", BindingFlags.Public | BindingFlags.Instance);
                                 if (sendMethod != null)
                                 {
-                                    System.Console.WriteLine($"[Client] Raw data sent (resize SSH channel request): cols={cols}, rows={rows}");
                                     uint colsUint = (uint)cols;
                                     uint rowsUint = (uint)rows;
                                     uint widthPixels = 0;
                                     uint heightPixels = 0;
                                     var result = sendMethod.Invoke(channel, new object[] { colsUint, rowsUint, widthPixels, heightPixels });
-                                    System.Console.WriteLine($"[Client] SendWindowChangeRequest returned: {result}");
                                     return;
                                 }
                             }
@@ -515,35 +567,28 @@ public class SshConnection : ITerminalConnection
                     }
                     catch (Exception ex)
                     {
-                        System.Console.WriteLine($"[Client] Exception in SSH channel request: {ex.GetType().Name}: {ex.Message}");
-                        System.Console.WriteLine($"[Client] Stack trace: {ex.StackTrace}");
                     }
-                    System.Console.WriteLine($"[Client] ERROR: SSH channel request failed - no resize sent");
                     break;
                     
                 case "ANSI":
                     var ansiCommand2 = $"\x1B[8;{rows};{cols}t";
-                    System.Console.WriteLine($"[Client] Raw data sent (resize ANSI): {EscapeString(ansiCommand2)}");
                     _shellStream.Write(ansiCommand2);
                     break;
                     
                 case "STTY":
                     var lineEnding = _config.LineEnding ?? "\n";
                     var sttyCommand = $"stty cols {cols} rows {rows}{lineEnding}";
-                    System.Console.WriteLine($"[Client] Raw data sent (resize STTY): {EscapeString(sttyCommand)}");
                     _shellStream.Write(sttyCommand);
                     break;
                     
                 case "XTERM":
                     var xtermCommand = $"\x1B[18t";
-                    System.Console.WriteLine($"[Client] Raw data sent (resize XTERM query): {EscapeString(xtermCommand)}");
                     _shellStream.Write(xtermCommand);
                     Task.Delay(50).ContinueWith(_ =>
                     {
                         if (_shellStream != null && IsConnected)
                         {
                             var resizeCommand = $"\x1B[8;{rows};{cols}t";
-                            System.Console.WriteLine($"[Client] Raw data sent (resize XTERM): {EscapeString(resizeCommand)}");
                             _shellStream.Write(resizeCommand);
                         }
                     });
@@ -565,7 +610,6 @@ public class SshConnection : ITerminalConnection
                                 var sendMethod = channel.GetType().GetMethod("SendWindowChangeRequest", BindingFlags.Public | BindingFlags.Instance);
                                 if (sendMethod != null)
                                 {
-                                    System.Console.WriteLine($"[Client] Raw data sent (resize SSH channel request default): cols={cols}, rows={rows}");
                                     uint colsUint = (uint)cols;
                                     uint rowsUint = (uint)rows;
                                     uint widthPixels = 0;
@@ -580,7 +624,6 @@ public class SshConnection : ITerminalConnection
                     {
                     }
                     var defaultCommand = $"\x1B[8;{rows};{cols}t";
-                    System.Console.WriteLine($"[Client] Raw data sent (resize default): {EscapeString(defaultCommand)}");
                     _shellStream.Write(defaultCommand);
                     break;
             }
@@ -647,6 +690,94 @@ public class SshConnection : ITerminalConnection
     {
         _shellStream?.Dispose();
         _sshClient?.Dispose();
+        _gatewayForward?.Dispose();
+        _gatewayClient?.Dispose();
+    }
+
+    private async Task<bool> ConnectToGatewayAsync()
+    {
+        if (_gatewayConfig == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            AuthenticationMethod gatewayAuthMethod;
+            if (_gatewayConfig.UsePasswordAuthentication)
+            {
+                gatewayAuthMethod = new PasswordAuthenticationMethod(_gatewayConfig.Username, _gatewayConfig.Password ?? string.Empty);
+            }
+            else if (!string.IsNullOrEmpty(_gatewayConfig.PrivateKeyPath) && File.Exists(_gatewayConfig.PrivateKeyPath))
+            {
+                var keyFile = new PrivateKeyFile(_gatewayConfig.PrivateKeyPath, _gatewayConfig.PrivateKeyPassphrase);
+                gatewayAuthMethod = new PrivateKeyAuthenticationMethod(_gatewayConfig.Username, keyFile);
+            }
+            else
+            {
+                ErrorOccurred?.Invoke(this, "Gateway session authentication method not configured");
+                return false;
+            }
+
+            var gatewayConnectionInfo = new ConnectionInfo(_gatewayConfig.Host, _gatewayConfig.Port > 0 ? _gatewayConfig.Port : DEFAULT_SSH_PORT, _gatewayConfig.Username, gatewayAuthMethod)
+            {
+                Timeout = TimeSpan.FromSeconds(_gatewayConfig.ConnectionTimeout > 0 ? _gatewayConfig.ConnectionTimeout : CONNECTION_TIMEOUT_SECONDS)
+            };
+
+            _gatewayClient = new SshClient(gatewayConnectionInfo);
+            
+            var gatewayTimeout = TimeSpan.FromSeconds(_gatewayConfig.ConnectionTimeout > 0 ? _gatewayConfig.ConnectionTimeout : CONNECTION_TIMEOUT_SECONDS);
+            try
+            {
+                var gatewayConnectTask = Task.Run(() =>
+                {
+                    _gatewayClient.Connect();
+                });
+                
+                if (await Task.WhenAny(gatewayConnectTask, Task.Delay(gatewayTimeout)) != gatewayConnectTask)
+                {
+                    _gatewayClient?.Disconnect();
+                    _gatewayClient?.Dispose();
+                    _gatewayClient = null;
+                    ErrorOccurred?.Invoke(this, $"Gateway connection timeout after {gatewayTimeout.TotalSeconds} seconds");
+                    return false;
+                }
+                
+                await gatewayConnectTask;
+            }
+            catch (Exception ex)
+            {
+                _gatewayClient?.Disconnect();
+                _gatewayClient?.Dispose();
+                _gatewayClient = null;
+                ErrorOccurred?.Invoke(this, $"Gateway connection failed: {ex.Message}");
+                return false;
+            }
+
+            if (!_gatewayClient.IsConnected)
+            {
+                ErrorOccurred?.Invoke(this, "Failed to connect to gateway");
+                return false;
+            }
+
+            var tcpListener = new TcpListener(IPAddress.Loopback, 0);
+            tcpListener.Start();
+            _gatewayLocalPort = ((IPEndPoint)tcpListener.LocalEndpoint).Port;
+            tcpListener.Stop();
+
+            _gatewayForward = new ForwardedPortLocal("127.0.0.1", (uint)_gatewayLocalPort, _host, (uint)_port);
+            _gatewayClient.AddForwardedPort(_gatewayForward);
+            _gatewayForward.Start();
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ErrorOccurred?.Invoke(this, $"Gateway connection failed: {ex.Message}");
+            _gatewayClient?.Dispose();
+            _gatewayClient = null;
+            return false;
+        }
     }
 }
 
