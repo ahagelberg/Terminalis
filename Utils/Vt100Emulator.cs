@@ -344,6 +344,9 @@ public class Vt100Emulator
                     ReportCursorPosition();
                 }
                 break;
+            case 'c':
+                // Device Attributes (DA) query - ignore silently
+                break;
             case 's':
                 SaveCursorPosition();
                 break;
