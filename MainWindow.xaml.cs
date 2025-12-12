@@ -83,7 +83,12 @@ public partial class MainWindow : Window
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
-        LoadWindowState();
+        var statePath = Path.Combine(_configManager.AppDataPath, WINDOW_STATE_FILE);
+        var state = _configManager.LoadWindowState<Models.WindowState>(statePath);
+        if (state != null && state.State == System.Windows.WindowState.Maximized)
+        {
+            WindowState = System.Windows.WindowState.Maximized;
+        }
         
         if (_appSettings.RestoreActiveSessionsOnStartup)
         {
@@ -107,26 +112,54 @@ public partial class MainWindow : Window
         var state = _configManager.LoadWindowState<Models.WindowState>(statePath);
         if (state != null)
         {
-            Left = state.Left;
-            Top = state.Top;
-            Width = state.Width;
-            Height = state.Height;
-            WindowState = state.State;
+            if (IsValidWindowPosition(state.Left, state.Top, state.Width, state.Height))
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual;
+                Left = state.Left;
+                Top = state.Top;
+                Width = state.Width;
+                Height = state.Height;
+            }
         }
     }
 
     private void SaveWindowState()
     {
+        var bounds = WindowState == System.Windows.WindowState.Maximized ? RestoreBounds : new Rect(Left, Top, Width, Height);
         var state = new Models.WindowState
         {
-            Left = Left,
-            Top = Top,
-            Width = Width,
-            Height = Height,
+            Left = bounds.Left,
+            Top = bounds.Top,
+            Width = bounds.Width,
+            Height = bounds.Height,
             State = WindowState
         };
         var statePath = Path.Combine(_configManager.AppDataPath, WINDOW_STATE_FILE);
         _configManager.SaveWindowState(state, statePath);
+    }
+
+    private bool IsValidWindowPosition(double left, double top, double width, double height)
+    {
+        if (width <= 0 || height <= 0)
+        {
+            return false;
+        }
+
+        var virtualScreenLeft = SystemParameters.VirtualScreenLeft;
+        var virtualScreenTop = SystemParameters.VirtualScreenTop;
+        var virtualScreenWidth = SystemParameters.VirtualScreenWidth;
+        var virtualScreenHeight = SystemParameters.VirtualScreenHeight;
+        
+        var virtualScreenRect = new Rect(
+            virtualScreenLeft,
+            virtualScreenTop,
+            virtualScreenWidth,
+            virtualScreenHeight
+        );
+        
+        var windowRect = new Rect(left, top, width, height);
+        
+        return virtualScreenRect.IntersectsWith(windowRect);
     }
 
     private ApplicationSettings LoadApplicationSettings()
@@ -187,12 +220,6 @@ public partial class MainWindow : Window
                     }
 
                     var connection = ConnectionFactory.CreateConnection(sshConfig, _knownHostsManager, ShowHostKeyVerificationDialog, _sessionManager);
-                    string? lastError = null;
-                    connection.ErrorOccurred += (sender, error) =>
-                    {
-                        lastError = error;
-                        OnErrorOccurred(sender, error);
-                    };
 
                     var tab = new TerminalTabItem();
                     await Dispatcher.InvokeAsync(() =>
@@ -509,15 +536,28 @@ public partial class MainWindow : Window
     {
         if (TerminalTabs.SelectedItem is TerminalTabItem tab && tab.Connection != null)
         {
-            StatusTextBlock.Text = tab.Connection.IsConnected 
-                ? $"Connected to {tab.ConnectionName}" 
-                : $"{tab.ConnectionName} (Disconnected)";
-            
-            if (!tab.Connection.IsConnected && tab.SessionConfig != null && 
-                (tab.SessionConfig.AutoReconnectMode == AutoReconnectMode.OnFocus || 
-                 tab.SessionConfig.AutoReconnectMode == AutoReconnectMode.OnDisconnect))
+            try
             {
-                await tab.ReconnectAsync();
+                bool isConnected = tab.Connection.IsConnected;
+                StatusTextBlock.Text = isConnected 
+                    ? $"Connected to {tab.ConnectionName}" 
+                    : $"{tab.ConnectionName} (Disconnected)";
+                
+                if (isConnected)
+                {
+                    tab.UpdateStatusIndicator(ConnectionStatus.Connected);
+                }
+                else if (tab.SessionConfig != null && 
+                    (tab.SessionConfig.AutoReconnectMode == AutoReconnectMode.OnFocus || 
+                     tab.SessionConfig.AutoReconnectMode == AutoReconnectMode.OnDisconnect))
+                {
+                    await tab.ReconnectAsync();
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                tab.UpdateStatusIndicator(ConnectionStatus.Disconnected);
+                StatusTextBlock.Text = $"{tab.ConnectionName} (Disconnected)";
             }
         }
         else
@@ -738,7 +778,6 @@ public partial class MainWindow : Window
             connection.ErrorOccurred += (sender, error) =>
             {
                 lastError = error;
-                OnErrorOccurred(sender, error);
             };
 
             tab.AttachConnection(connection, config.Color, config);
