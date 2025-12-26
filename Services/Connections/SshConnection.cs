@@ -245,7 +245,7 @@ public class SshConnection : ITerminalConnection
                 throw new SshConnectionException("Host key verification failed or was cancelled.", hostKeyException);
             }
 
-            if (_sshClient.IsConnected)
+            if (_sshClient != null && _sshClient.IsConnected)
             {
                 if (_config.KeepAliveInterval > 0)
                 {
@@ -565,7 +565,7 @@ public class SshConnection : ITerminalConnection
                             }
                         }
                     }
-                    catch (Exception ex)
+                    catch
                     {
                     }
                     break;

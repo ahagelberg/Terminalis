@@ -11,6 +11,7 @@ using System.Windows.Markup;
 using TabbySSH.Models;
 using TabbySSH.Services;
 using TabbySSH.Services.Connections;
+using TabbySSH.Utils;
 using TabbySSH.Views;
 
 namespace TabbySSH;
@@ -201,7 +202,7 @@ public partial class MainWindow : Window
         }
 
         var orderedSessions = activeSessions.OrderBy(s => s.TabIndex).ToList();
-        var tabs = new List<(TerminalTabItem tab, SshSessionConfiguration config, ITerminalConnection connection)>();
+        var tabs = new List<(TerminalTabItem tab, SshSessionConfiguration config)>();
         
         foreach (var sessionInfo in orderedSessions)
         {
@@ -219,16 +220,14 @@ public partial class MainWindow : Window
                         }
                     }
 
-                    var connection = ConnectionFactory.CreateConnection(sshConfig, _knownHostsManager, ShowHostKeyVerificationDialog, _sessionManager);
-
+                    var activeConfig = CopySessionConfiguration(sshConfig);
                     var tab = new TerminalTabItem();
                     await Dispatcher.InvokeAsync(() =>
                     {
                         TerminalTabs.Items.Add(tab);
                     });
-                    tab.AttachConnection(connection, sshConfig.Color, sshConfig);
                     
-                    tabs.Add((tab, sshConfig, connection));
+                    tabs.Add((tab, activeConfig));
                 }
                 else if (session == null)
                 {
@@ -246,45 +245,31 @@ public partial class MainWindow : Window
             TerminalTabs.SelectedItem = tabs[0].tab;
             UpdateTitleBarColor();
             
-            var connectTasks = tabs.Select(async item =>
+            foreach (var item in tabs)
             {
-                try
+                _ = Task.Run(async () =>
                 {
-                    var connected = await item.connection.ConnectAsync();
-                    if (connected)
+                    try
                     {
-                        await Dispatcher.InvokeAsync(() =>
+                        var (connected, error) = await ConnectSessionAsync(item.tab, item.config, removeTabOnFailure: true);
+                        if (!connected)
                         {
-                            item.tab.SetConnected();
-                        });
+                            System.Diagnostics.Debug.WriteLine($"Error connecting session {item.config.Id}: {error ?? "Unknown error"}");
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
+                        System.Diagnostics.Debug.WriteLine($"Error connecting session {item.config.Id}: {ex.Message}");
                         await Dispatcher.InvokeAsync(() =>
                         {
                             if (TerminalTabs.Items.Contains(item.tab))
                             {
                                 TerminalTabs.Items.Remove(item.tab);
                             }
-                            item.connection.Dispose();
                         });
                     }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error connecting session {item.config.Id}: {ex.Message}");
-                    await Dispatcher.InvokeAsync(() =>
-                    {
-                        if (TerminalTabs.Items.Contains(item.tab))
-                        {
-                            TerminalTabs.Items.Remove(item.tab);
-                        }
-                        item.connection.Dispose();
-                    });
-                }
-            });
-            
-            await Task.WhenAll(connectTasks);
+                });
+            }
             
             if (tabs.Count > 0 && TerminalTabs.Items.Count > 0)
             {
@@ -415,6 +400,53 @@ public partial class MainWindow : Window
         }
     }
 
+    private SshSessionConfiguration CopySessionConfiguration(SshSessionConfiguration source)
+    {
+        return new SshSessionConfiguration
+        {
+            Id = source.Id,
+            Name = source.Name,
+            Host = source.Host,
+            Port = source.Port,
+            Username = source.Username,
+            Password = source.Password,
+            PrivateKeyPath = source.PrivateKeyPath,
+            PrivateKeyPassphrase = source.PrivateKeyPassphrase,
+            UsePasswordAuthentication = source.UsePasswordAuthentication,
+            KeepAliveInterval = source.KeepAliveInterval,
+            ConnectionTimeout = source.ConnectionTimeout,
+            CompressionEnabled = source.CompressionEnabled,
+            X11ForwardingEnabled = source.X11ForwardingEnabled,
+            BellNotification = source.BellNotification,
+            PortForwardingRules = source.PortForwardingRules.Select(r => new PortForwardingRule
+            {
+                Name = r.Name,
+                IsLocal = r.IsLocal,
+                LocalHost = r.LocalHost,
+                LocalPort = r.LocalPort,
+                RemoteHost = r.RemoteHost,
+                RemotePort = r.RemotePort,
+                Enabled = r.Enabled
+            }).ToList(),
+            FontFamily = source.FontFamily,
+            FontSize = source.FontSize,
+            ForegroundColor = source.ForegroundColor,
+            BackgroundColor = source.BackgroundColor,
+            TerminalResizeMethod = source.TerminalResizeMethod,
+            ResetScrollOnUserInput = source.ResetScrollOnUserInput,
+            ResetScrollOnServerOutput = source.ResetScrollOnServerOutput,
+            ScreenSessionName = source.ScreenSessionName,
+            BackspaceKey = source.BackspaceKey,
+            AutoReconnectMode = source.AutoReconnectMode,
+            GatewaySessionId = source.GatewaySessionId,
+            Color = source.Color,
+            LineEnding = source.LineEnding,
+            Encoding = source.Encoding,
+            Group = source.Group,
+            Order = source.Order
+        };
+    }
+
     private async Task CreateNewTab(SshSessionConfiguration config)
     {
         StatusTextBlock.Text = "Connecting...";
@@ -427,38 +459,25 @@ public partial class MainWindow : Window
                 _sessionManager.AddSession(config);
             }
 
-            var connection = ConnectionFactory.CreateConnection(config, _knownHostsManager, ShowHostKeyVerificationDialog, _sessionManager);
-            string? lastError = null;
-            connection.ErrorOccurred += (sender, error) =>
-            {
-                lastError = error;
-                OnErrorOccurred(sender, error);
-            };
-
+            var activeConfig = CopySessionConfiguration(config);
             var tab = new TerminalTabItem();
             TerminalTabs.Items.Add(tab);
             TerminalTabs.SelectedItem = tab;
-
-            tab.AttachConnection(connection, config.Color, config);
-            
             UpdateTitleBarColor();
 
-            var connected = await connection.ConnectAsync();
-
+            var (connected, error) = await ConnectSessionAsync(tab, activeConfig, removeTabOnFailure: true);
+            
             if (connected)
             {
-                tab.SetConnected();
-                StatusTextBlock.Text = $"Connected to {config.Name}";
+                StatusTextBlock.Text = $"Connected to {activeConfig.Name}";
             }
             else
             {
-                TerminalTabs.Items.Remove(tab);
                 StatusTextBlock.Text = "Connection failed";
-                var errorMessage = string.IsNullOrEmpty(lastError) 
-                    ? $"Failed to connect to {config.Name}" 
-                    : $"Failed to connect to {config.Name}: {lastError}";
+                var errorMessage = string.IsNullOrEmpty(error) 
+                    ? $"Failed to connect to {activeConfig.Name}" 
+                    : $"Failed to connect to {activeConfig.Name}: {error}";
                 ShowNotification(errorMessage, NotificationType.Error);
-                connection.Dispose();
             }
         }
         catch (Exception ex)
@@ -467,6 +486,70 @@ public partial class MainWindow : Window
             ShowNotification($"Failed to connect to {config.Name}: {ex.Message}", NotificationType.Error);
             MessageBox.Show($"Failed to connect: {ex.Message}", "Connection Error", 
                 MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+    
+    private async Task<(bool connected, string? error)> ConnectSessionAsync(TerminalTabItem tab, SshSessionConfiguration config, bool removeTabOnFailure = false)
+    {
+        string? lastError = null;
+        ITerminalConnection? connection = null;
+        
+        try
+        {
+            var activeConfig = CopySessionConfiguration(config);
+            connection = ConnectionFactory.CreateConnection(activeConfig, _knownHostsManager, ShowHostKeyVerificationDialog, _sessionManager);
+            
+            connection.ErrorOccurred += (sender, error) =>
+            {
+                lastError = error;
+                OnErrorOccurred(sender, error);
+            };
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                tab.AttachConnection(connection, activeConfig.Color, activeConfig);
+            });
+            
+            var connected = await connection.ConnectAsync();
+
+            if (connected)
+            {
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    tab.SetConnected();
+                });
+                return (true, null);
+            }
+            else
+            {
+                if (removeTabOnFailure)
+                {
+                    await Dispatcher.InvokeAsync(() =>
+                    {
+                        if (TerminalTabs.Items.Contains(tab))
+                        {
+                            TerminalTabs.Items.Remove(tab);
+                        }
+                    });
+                }
+                connection?.Dispose();
+                return (false, lastError);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (removeTabOnFailure)
+            {
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (TerminalTabs.Items.Contains(tab))
+                    {
+                        TerminalTabs.Items.Remove(tab);
+                    }
+                });
+            }
+            connection?.Dispose();
+            return (false, ex.Message);
         }
     }
 
@@ -773,22 +856,10 @@ public partial class MainWindow : Window
     {
         try
         {
-            var connection = ConnectionFactory.CreateConnection(config, _knownHostsManager, ShowHostKeyVerificationDialog, _sessionManager);
-            string? lastError = null;
-            connection.ErrorOccurred += (sender, error) =>
-            {
-                lastError = error;
-            };
-
-            tab.AttachConnection(connection, config.Color, config);
+            var (connected, error) = await ConnectSessionAsync(tab, config, removeTabOnFailure: false);
             
-            UpdateTitleBarColor();
-
-            var connected = await connection.ConnectAsync();
-
             if (connected)
             {
-                tab.SetConnected();
                 StatusTextBlock.Text = $"Reconnected to {config.Name}";
                 ShowNotification($"Reconnected to {config.Name}", NotificationType.Success);
             }
@@ -799,9 +870,9 @@ public partial class MainWindow : Window
                     tab.UpdateStatusIndicator(ConnectionStatus.Error);
                 }));
                 StatusTextBlock.Text = "Reconnection failed";
-                var errorMessage = string.IsNullOrEmpty(lastError) 
+                var errorMessage = string.IsNullOrEmpty(error) 
                     ? $"Failed to reconnect to {config.Name}" 
-                    : $"Failed to reconnect to {config.Name}: {lastError}";
+                    : $"Failed to reconnect to {config.Name}: {error}";
                 ShowNotification(errorMessage, NotificationType.Error);
             }
         }

@@ -304,7 +304,6 @@ public partial class TerminalEmulator : UserControl
 
     private void OnDataReceived(object? sender, string data)
     {
-        System.Console.WriteLine($"[Server] Raw data received: {EscapeString(data)}");
         Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
         {
             if (_emulator != null)

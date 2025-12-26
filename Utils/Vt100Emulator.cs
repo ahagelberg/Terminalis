@@ -30,6 +30,8 @@ public class Vt100Emulator
     private readonly List<List<TerminalCell>> _screen = new();
     private readonly List<List<TerminalCell>> _scrollback = new();
     private readonly AnsiParser _ansiParser = new();
+    private readonly StringBuilder _characterBatch = new();
+    private bool _batchingCharacters = false;
     private int _cursorRow = 0;
     private int _cursorCol = 0;
     private int _rows = DEFAULT_ROWS;
@@ -142,7 +144,15 @@ public class Vt100Emulator
 
     public void ProcessData(string data)
     {
-        _ansiParser.ProcessData(data);
+        BeginCharacterBatch();
+        try
+        {
+            _ansiParser.ProcessData(data);
+        }
+        finally
+        {
+            EndCharacterBatch();
+        }
     }
 
     public TerminalCell GetCell(int row, int col)
@@ -399,6 +409,14 @@ public class Vt100Emulator
 
     private void OnCharacter(object? sender, char c)
     {
+        if (_batchingCharacters && c >= 32 && c < 127 && c != '\r' && c != '\n' && c != '\t' && c != '\b' && c != '\x07')
+        {
+            _characterBatch.Append(c);
+            return;
+        }
+        
+        FlushCharacterBatch();
+        
         switch (c)
         {
             case '\r':
@@ -428,13 +446,41 @@ public class Vt100Emulator
             default:
                 if (c >= 32 && c < 127)
                 {
-                    WriteCharacter(c);
+                    WriteCharacter(c, suppressScreenChanged: false);
                 }
                 break;
         }
     }
+    
+    public void BeginCharacterBatch()
+    {
+        _batchingCharacters = true;
+        _characterBatch.Clear();
+    }
+    
+    public void EndCharacterBatch()
+    {
+        FlushCharacterBatch();
+        _batchingCharacters = false;
+    }
+    
+    private void FlushCharacterBatch()
+    {
+        if (_characterBatch.Length > 0)
+        {
+            var text = _characterBatch.ToString();
+            _characterBatch.Clear();
+            
+            foreach (var c in text)
+            {
+                WriteCharacter(c, suppressScreenChanged: true);
+            }
+            
+            ScreenChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
 
-    private void WriteCharacter(char c)
+    private void WriteCharacter(char c, bool suppressScreenChanged = false)
     {
         if (_cursorCol >= _cols)
         {
@@ -462,7 +508,10 @@ public class Vt100Emulator
 
             _cursorCol++;
             EnsureCursorInBounds();
-            ScreenChanged?.Invoke(this, EventArgs.Empty);
+            if (!suppressScreenChanged)
+            {
+                ScreenChanged?.Invoke(this, EventArgs.Empty);
+            }
         }
     }
 

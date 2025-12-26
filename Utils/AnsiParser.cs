@@ -23,9 +23,47 @@ public class AnsiParser
 
     public void ProcessData(string data)
     {
-        foreach (var c in data)
+        if (string.IsNullOrEmpty(data))
         {
-            ProcessCharacter(c);
+            return;
+        }
+
+        var span = data.AsSpan();
+        int i = 0;
+        
+        while (i < span.Length)
+        {
+            if (_state == AnsiState.Normal)
+            {
+                int normalStart = i;
+                while (i < span.Length && span[i] != ESC && span[i] >= 32 && span[i] != 127)
+                {
+                    i++;
+                }
+                
+                if (i > normalStart)
+                {
+                    var normalText = span.Slice(normalStart, i - normalStart);
+                    if (CharacterReceived != null)
+                    {
+                        foreach (var c in normalText)
+                        {
+                            CharacterReceived.Invoke(this, c);
+                        }
+                    }
+                }
+                
+                if (i < span.Length)
+        {
+                    ProcessCharacter(span[i]);
+                    i++;
+                }
+            }
+            else
+            {
+                ProcessCharacter(span[i]);
+                i++;
+            }
         }
     }
 
@@ -103,10 +141,6 @@ public class AnsiParser
         {
             _state = AnsiState.Escape;
             _buffer.Clear();
-        }
-        else if (c < 32 || c == 127)
-        {
-            CharacterReceived?.Invoke(this, c);
         }
         else
         {
