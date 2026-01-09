@@ -212,6 +212,12 @@ public class AnsiParser
             CommandReceived?.Invoke(this, command);
             _state = AnsiState.Normal;
         }
+        else if (c == 'B')
+        {
+            var command = new AnsiCommand { Type = AnsiCommandType.SingleChar, FinalChar = 'B' };
+            CommandReceived?.Invoke(this, command);
+            _state = AnsiState.Normal;
+        }
         else if (c == 'X')
         {
             var command = new AnsiCommand { Type = AnsiCommandType.SingleChar, FinalChar = 'X' };

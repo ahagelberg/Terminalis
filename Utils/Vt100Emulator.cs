@@ -53,6 +53,8 @@ public class Vt100Emulator
     private bool _overline = false;
     private bool _bracketedPasteMode = false;
     private bool _cursorKeyMode = false; // DECCKM: false = application mode (ESC O), true = cursor mode (ESC [)
+    private bool _insertMode = false; // IRM: false = replace mode (default), true = insert mode
+    private bool _autoWrapMode = true; // DECAWM: true = auto-wrap enabled (default), false = auto-wrap disabled
     
     // Alternate screen buffer state
     private List<TerminalLine>? _savedMainScreenLines = null;
@@ -70,6 +72,12 @@ public class Vt100Emulator
     private bool _savedMainScreenCrossedOut = false;
     private bool _savedMainScreenDoubleUnderline = false;
     private bool _savedMainScreenOverline = false;
+
+    private string? _currentTitle = null;
+    private string? _savedTitle = null;
+
+    private int _scrollRegionTop = -1; // -1 means no scrolling region (entire screen scrolls)
+    private int _scrollRegionBottom = -1; // -1 means no scrolling region (entire screen scrolls)
 
     public int Rows => _rows;
     public int Cols => _cols;
@@ -174,6 +182,10 @@ public class Vt100Emulator
         {
             ProcessOscCommand(command);
         }
+        else if (command.Type == AnsiCommandType.SingleChar)
+        {
+            ProcessSingleCharCommand(command);
+        }
         else
         {
             // Warn about unhandled ANSI commands
@@ -183,8 +195,8 @@ public class Vt100Emulator
                 AnsiCommandType.Dcs => "DCS (Device Control String)",
                 _ => $"Unknown command type: {command.Type}"
             };
-            Debug.WriteLine($"[Vt100Emulator] Unhandled ANSI command: {commandDesc}");
-            System.Console.WriteLine($"[Vt100Emulator] Unhandled ANSI command: {commandDesc}");
+            Debug.WriteLine($"[Vt100Emulator] ***Unhandled ANSI command: {commandDesc}");
+            System.Console.WriteLine($"[Vt100Emulator] ***Unhandled ANSI command: {commandDesc}");
         }
     }
 
@@ -212,14 +224,17 @@ public class Vt100Emulator
                     if (parts.Length > 1)
                     {
                         string title = parts[1];
+                        _currentTitle = title;
+                        Debug.WriteLine($"[Vt100Emulator] Handled OSC command: ESC]{oscCode};{title} (Set window title)");
+                        System.Console.WriteLine($"[Vt100Emulator] Handled OSC command: ESC]{oscCode};{title} (Set window title)");
                         TitleChanged?.Invoke(this, title);
                     }
                 }
                 break;
             default:
                 // Other OSC commands not implemented yet
-                Debug.WriteLine($"[Vt100Emulator] Unhandled OSC command: {oscString} (code: {oscCode})");
-                System.Console.WriteLine($"[Vt100Emulator] Unhandled OSC command: {oscString} (code: {oscCode})");
+                Debug.WriteLine($"[Vt100Emulator] ***Unhandled OSC command: {oscString} (code: {oscCode})");
+                System.Console.WriteLine($"[Vt100Emulator] ***Unhandled OSC command: {oscString} (code: {oscCode})");
                 break;
         }
     }
@@ -232,22 +247,76 @@ public class Vt100Emulator
         // Process SGR (m) command for text styles and colors
         if (final == 'm')
         {
+            var paramStr = p.Count > 0 ? string.Join(";", p) : "";
+            var commandStr = $"\x1B[{paramStr}m";
+            var escapedStr = AnsiParser.EscapeString(commandStr);
+            Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (SGR - Select Graphic Rendition)");
+            System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (SGR - Select Graphic Rendition)");
             ProcessSgr(p);
         }
-        // Process mode change commands (h/l) for private parameters
-        else if ((final == 'h' || final == 'l') && command.IsPrivate && p.Count > 0)
+        // Process mode change commands (h/l)
+        else if ((final == 'h' || final == 'l') && p.Count > 0)
         {
-            ProcessModeChange(p[0], final == 'h');
+            if (command.IsPrivate)
+            {
+                // Private mode changes (DEC modes) - ESC [ ? ... h/l
+                var paramStr = p.Count > 0 ? string.Join(";", p) : "";
+                var commandStr = $"\x1B[?{paramStr}{final}";
+                var escapedStr = AnsiParser.EscapeString(commandStr);
+                Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (DEC Mode change: mode={p[0]}, set={final == 'h'})");
+                System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (DEC Mode change: mode={p[0]}, set={final == 'h'})");
+                ProcessDecModeChange(p[0], final == 'h');
+            }
+            else
+            {
+                // Non-private mode changes (ANSI modes) - ESC [ ... h/l
+                var paramStr = p.Count > 0 ? string.Join(";", p) : "";
+                var commandStr = $"\x1B[{paramStr}{final}";
+                var escapedStr = AnsiParser.EscapeString(commandStr);
+                Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (ANSI Mode change: mode={p[0]}, set={final == 'h'})");
+                System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (ANSI Mode change: mode={p[0]}, set={final == 'h'})");
+                ProcessAnsiModeChange(p[0], final == 'h');
+            }
         }
         // Process Erase in Display (J) command
         else if (final == 'J')
         {
+            var paramStr = p.Count > 0 ? string.Join(";", p) : "";
+            var commandStr = $"\x1B[{paramStr}J";
+            var escapedStr = AnsiParser.EscapeString(commandStr);
+            Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Display)");
+            System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Display)");
             ProcessEraseInDisplay(p);
         }
         // Process Erase in Line (K) command
         else if (final == 'K')
         {
+            var paramStr = p.Count > 0 ? string.Join(";", p) : "";
+            var commandStr = $"\x1B[{paramStr}K";
+            var escapedStr = AnsiParser.EscapeString(commandStr);
+            Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Line)");
+            System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Line)");
             ProcessEraseInLine(p);
+        }
+        // Process Window Manipulation (t) commands
+        else if (final == 't')
+        {
+            var paramStr = p.Count > 0 ? string.Join(";", p) : "";
+            var commandStr = $"\x1B[{paramStr}t";
+            var escapedStr = AnsiParser.EscapeString(commandStr);
+            Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Window Manipulation)");
+            System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Window Manipulation)");
+            ProcessWindowManipulation(p);
+        }
+        // Process Set Scrolling Region (r) command
+        else if (final == 'r')
+        {
+            var paramStr = p.Count > 0 ? string.Join(";", p) : "";
+            var commandStr = $"\x1B[{paramStr}r";
+            var escapedStr = AnsiParser.EscapeString(commandStr);
+            Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Set Scrolling Region)");
+            System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Set Scrolling Region)");
+            ProcessSetScrollingRegion(p);
         }
         else
         {
@@ -256,12 +325,12 @@ public class Vt100Emulator
             var isPrivate = command.IsPrivate ? "?" : "";
             var commandStr = $"\x1B[{isPrivate}{paramStr}{final}";
             var escapedStr = AnsiParser.EscapeString(commandStr);
-            Debug.WriteLine($"[Vt100Emulator] Unhandled CSI command: {escapedStr} (final char: '{final}' (0x{(int)final:X2}), params: [{paramStr}])");
-            System.Console.WriteLine($"[Vt100Emulator] Unhandled CSI command: {escapedStr} (final char: '{final}' (0x{(int)final:X2}), params: [{paramStr}])");
+            Debug.WriteLine($"[Vt100Emulator] ***Unhandled CSI command: {escapedStr} (final char: '{final}' (0x{(int)final:X2}), params: [{paramStr}])");
+            System.Console.WriteLine($"[Vt100Emulator] ***Unhandled CSI command: {escapedStr} (final char: '{final}' (0x{(int)final:X2}), params: [{paramStr}])");
         }
     }
 
-    private void ProcessModeChange(int mode, bool set)
+    private void ProcessDecModeChange(int mode, bool set)
     {
         switch (mode)
         {
@@ -289,6 +358,14 @@ public class Vt100Emulator
                 Debug.WriteLine($"[Vt100Emulator] Alternate Screen Buffer (DECALTB): {(set ? "enabled" : "disabled")}");
                 System.Console.WriteLine($"[Vt100Emulator] Alternate Screen Buffer (DECALTB): {(set ? "enabled" : "disabled")}");
                 break;
+            case 7:
+                // DECAWM - Auto-Wrap Mode
+                // When enabled (set=true): text automatically wraps to next line when cursor reaches right margin
+                // When disabled (set=false): cursor stays at right margin, characters overwrite last character
+                _autoWrapMode = set;
+                Debug.WriteLine($"[Vt100Emulator] Auto-Wrap Mode (DECAWM): {(set ? "enabled (text wraps at right margin)" : "disabled (text doesn't wrap)")}");
+                System.Console.WriteLine($"[Vt100Emulator] Auto-Wrap Mode (DECAWM): {(set ? "enabled (text wraps at right margin)" : "disabled (text doesn't wrap)")}");
+                break;
             case 2004:
                 // Bracketed paste mode
                 // When enabled (set=true), pasted text should be wrapped with \x1B[200~ and \x1B[201~
@@ -297,9 +374,29 @@ public class Vt100Emulator
                 Debug.WriteLine($"[Vt100Emulator] Bracketed paste mode: {(set ? "enabled" : "disabled")}");
                 break;
             default:
-                // Other mode changes not implemented yet
-                Debug.WriteLine($"[Vt100Emulator] Unhandled mode change: mode={mode}, set={set}");
-                System.Console.WriteLine($"[Vt100Emulator] Unhandled mode change: mode={mode}, set={set}");
+                // Other DEC mode changes not implemented yet
+                Debug.WriteLine($"[Vt100Emulator] ***Unhandled DEC mode change: mode={mode}, set={set}");
+                System.Console.WriteLine($"[Vt100Emulator] ***Unhandled DEC mode change: mode={mode}, set={set}");
+                break;
+        }
+    }
+
+    private void ProcessAnsiModeChange(int mode, bool set)
+    {
+        switch (mode)
+        {
+            case 4:
+                // IRM - Insert Replace Mode
+                // When enabled (set=true): Insert Mode - new characters shift existing characters to the right
+                // When disabled (set=false): Replace Mode - new characters overwrite existing characters (default)
+                _insertMode = set;
+                Debug.WriteLine($"[Vt100Emulator] Insert/Replace Mode (IRM): {(set ? "Insert Mode (characters shift right)" : "Replace Mode (characters overwrite)")}");
+                System.Console.WriteLine($"[Vt100Emulator] Insert/Replace Mode (IRM): {(set ? "Insert Mode (characters shift right)" : "Replace Mode (characters overwrite)")}");
+                break;
+            default:
+                // Other ANSI mode changes not implemented yet
+                Debug.WriteLine($"[Vt100Emulator] ***Unhandled ANSI mode change: mode={mode}, set={set}");
+                System.Console.WriteLine($"[Vt100Emulator] ***Unhandled ANSI mode change: mode={mode}, set={set}");
                 break;
         }
     }
@@ -307,6 +404,17 @@ public class Vt100Emulator
     private void ProcessEraseInDisplay(List<int> parameters)
     {
         int param = parameters.Count > 0 ? parameters[0] : 0;
+        
+        string operation = param switch
+        {
+            0 => "Erase from cursor to end of screen",
+            1 => "Erase from cursor to beginning of screen",
+            2 => "Erase entire screen",
+            3 => "Erase entire screen and scrollback buffer",
+            _ => $"Unknown erase operation (param={param})"
+        };
+        Debug.WriteLine($"[Vt100Emulator] Erase in Display: {operation}");
+        System.Console.WriteLine($"[Vt100Emulator] Erase in Display: {operation}");
         
         if (param == 0)
         {
@@ -339,8 +447,20 @@ public class Vt100Emulator
         
         if (_currentLineIndex < 0 || _currentLineIndex >= _lines.Count)
         {
+            Debug.WriteLine($"[Vt100Emulator] Erase in Line: Invalid line index ({_currentLineIndex}), ignoring");
+            System.Console.WriteLine($"[Vt100Emulator] Erase in Line: Invalid line index ({_currentLineIndex}), ignoring");
             return;
         }
+        
+        string operation = param switch
+        {
+            0 => "Erase from cursor to end of line",
+            1 => "Erase from cursor to beginning of line",
+            2 => "Erase entire line",
+            _ => $"Unknown erase operation (param={param})"
+        };
+        Debug.WriteLine($"[Vt100Emulator] Erase in Line: {operation}");
+        System.Console.WriteLine($"[Vt100Emulator] Erase in Line: {operation}");
         
         var line = _lines[_currentLineIndex];
         
@@ -440,6 +560,153 @@ public class Vt100Emulator
         _writeCol = 0;
     }
 
+    private void ProcessWindowManipulation(List<int> parameters)
+    {
+        if (parameters.Count == 0)
+        {
+            return;
+        }
+        
+        int operation = parameters[0];
+        
+        switch (operation)
+        {
+            case 22:
+                // Save window title (xterm extension)
+                // Save the current title so it can be restored later with operation 23
+                _savedTitle = _currentTitle;
+                Debug.WriteLine($"[Vt100Emulator] Window title saved: \"{_savedTitle ?? "(null)"}\"");
+                System.Console.WriteLine($"[Vt100Emulator] Window title saved: \"{_savedTitle ?? "(null)"}\"");
+                break;
+            case 23:
+                // Restore window title (xterm extension)
+                // Restore the previously saved title
+                if (_savedTitle != null)
+                {
+                    _currentTitle = _savedTitle;
+                    TitleChanged?.Invoke(this, _savedTitle);
+                    Debug.WriteLine($"[Vt100Emulator] Window title restored: \"{_savedTitle}\"");
+                    System.Console.WriteLine($"[Vt100Emulator] Window title restored: \"{_savedTitle}\"");
+                }
+                else
+                {
+                    Debug.WriteLine($"[Vt100Emulator] Window title restore requested but no title was saved");
+                    System.Console.WriteLine($"[Vt100Emulator] Window title restore requested but no title was saved");
+                }
+                break;
+            default:
+                // Other window manipulation operations not implemented
+                // Most window manipulation (move, resize, maximize) doesn't apply to client-side terminals
+                var paramStr = parameters.Count > 0 ? string.Join(";", parameters) : "";
+                Debug.WriteLine($"[Vt100Emulator] ***Unhandled window manipulation: operation={operation}, params=[{paramStr}]");
+                System.Console.WriteLine($"[Vt100Emulator] ***Unhandled window manipulation: operation={operation}, params=[{paramStr}]");
+                break;
+        }
+    }
+
+    private void ProcessSetScrollingRegion(List<int> parameters)
+    {
+        // ESC [ top ; bottom r - Set scrolling region
+        // Parameters are 1-based (1 = first line)
+        // If no parameters or only one parameter, reset to full screen
+        if (parameters.Count == 0)
+        {
+            // Reset scrolling region to full screen
+            _scrollRegionTop = -1;
+            _scrollRegionBottom = -1;
+            Debug.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen");
+            System.Console.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen");
+        }
+        else if (parameters.Count >= 2)
+        {
+            // Convert from 1-based to 0-based
+            int top = parameters[0] - 1;
+            int bottom = parameters[1] - 1;
+            
+            // Validate: top must be >= 0, bottom must be >= top, and both must be < terminal height
+            if (top >= 0 && bottom >= top && bottom < _rows)
+            {
+                _scrollRegionTop = top;
+                _scrollRegionBottom = bottom;
+                Debug.WriteLine($"[Vt100Emulator] Scrolling region set: lines {top + 1}-{bottom + 1} (0-based: {top}-{bottom})");
+                System.Console.WriteLine($"[Vt100Emulator] Scrolling region set: lines {top + 1}-{bottom + 1} (0-based: {top}-{bottom})");
+            }
+            else
+            {
+                // Invalid parameters, reset to full screen
+                _scrollRegionTop = -1;
+                _scrollRegionBottom = -1;
+                Debug.WriteLine($"[Vt100Emulator] Invalid scrolling region parameters (top={top}, bottom={bottom}), reset to full screen");
+                System.Console.WriteLine($"[Vt100Emulator] Invalid scrolling region parameters (top={top}, bottom={bottom}), reset to full screen");
+            }
+        }
+        else
+        {
+            // Only one parameter - reset to full screen
+            _scrollRegionTop = -1;
+            _scrollRegionBottom = -1;
+            Debug.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen (only one parameter provided)");
+            System.Console.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen (only one parameter provided)");
+        }
+    }
+
+    private void ProcessSingleCharCommand(AnsiCommand command)
+    {
+        char final = command.FinalChar;
+        
+        switch (final)
+        {
+            case 'B':
+                // VT52: Cursor Down - move cursor down one line, same column
+                MoveCursorDown();
+                Debug.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (VT52 Cursor Down)");
+                System.Console.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (VT52 Cursor Down)");
+                break;
+            case '7':
+                // Save cursor position
+                // TODO: Implement cursor position save/restore
+                Debug.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Save Cursor Position - not yet implemented)");
+                System.Console.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Save Cursor Position - not yet implemented)");
+                break;
+            case '8':
+                // Restore cursor position
+                // TODO: Implement cursor position save/restore
+                Debug.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Restore Cursor Position - not yet implemented)");
+                System.Console.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Restore Cursor Position - not yet implemented)");
+                break;
+            default:
+                Debug.WriteLine($"[Vt100Emulator] ***Unhandled single-char command: ESC{final}");
+                System.Console.WriteLine($"[Vt100Emulator] ***Unhandled single-char command: ESC{final}");
+                break;
+        }
+    }
+
+    private void MoveCursorDown()
+    {
+        // Move cursor down one line, keeping the same column
+        if (_currentLineIndex < 0)
+        {
+            // No current line, create one
+            _currentLineIndex = 0;
+            if (_lines.Count == 0)
+            {
+                _lines.Add(new TerminalLine());
+            }
+        }
+        else
+        {
+            // Move to next line
+            _currentLineIndex++;
+            // Ensure the line exists
+            while (_currentLineIndex >= _lines.Count)
+            {
+                _lines.Add(new TerminalLine());
+            }
+        }
+        // Column position remains the same
+        CursorMoved?.Invoke(this, EventArgs.Empty);
+    }
+
     private void OnCharacter(object? sender, char c)
     {
         if (_batchingCharacters && c >= 32 && c < 127 && c != '\r' && c != '\n' && c != '\t' && c != '\b' && c != '\x07')
@@ -488,8 +755,8 @@ public class Vt100Emulator
                     // Unhandled control character
                     var charName = GetControlCharName(c);
                     var charCode = (int)c;
-                    Debug.WriteLine($"[Vt100Emulator] Unhandled control character: {charName} (0x{charCode:X2}, '\\u{charCode:X4}')");
-                    System.Console.WriteLine($"[Vt100Emulator] Unhandled control character: {charName} (0x{charCode:X2}, '\\u{charCode:X4}')");
+                    Debug.WriteLine($"[Vt100Emulator] ***Unhandled control character: {charName} (0x{charCode:X2}, '\\u{charCode:X4}')");
+                    System.Console.WriteLine($"[Vt100Emulator] ***Unhandled control character: {charName} (0x{charCode:X2}, '\\u{charCode:X4}')");
                 }
                 break;
         }
@@ -528,10 +795,20 @@ public class Vt100Emulator
 
     private void WriteCharacter(char c, bool suppressScreenChanged = false)
     {
-        // If we've reached terminal width, start a new line
+        // If we've reached terminal width, handle according to auto-wrap mode
         if (_writeCol >= _cols && _cols > 0)
         {
-            NewLine();
+            if (_autoWrapMode)
+            {
+                // Auto-wrap enabled: start a new line
+                NewLine();
+            }
+            else
+            {
+                // Auto-wrap disabled: stay at right margin, overwrite last character
+                // Don't create a new line, just write at the last column
+                _writeCol = _cols - 1;
+            }
         }
 
         // Ensure we have a current line
@@ -543,26 +820,58 @@ public class Vt100Emulator
 
         var line = _lines[_currentLineIndex];
         
-        // Ensure line has enough cells up to current column
-        while (line.Cells.Count <= _writeCol)
+        if (_insertMode)
         {
-            line.Cells.Add(new TerminalCell());
+            // Insert Mode: shift existing characters to the right
+            // Ensure line has enough cells up to current column
+            while (line.Cells.Count <= _writeCol)
+            {
+                line.Cells.Add(new TerminalCell());
+            }
+            
+            // Insert a new cell at the cursor position (shifts existing cells right)
+            var newCell = new TerminalCell
+            {
+                Character = c,
+                ForegroundColor = _foregroundColor,
+                BackgroundColor = _backgroundColor,
+                Bold = _bold,
+                Faint = _faint,
+                Italic = _italic,
+                Underline = _underline,
+                DoubleUnderline = _doubleUnderline,
+                Blink = _blink,
+                Reverse = _reverse,
+                Conceal = _conceal,
+                CrossedOut = _crossedOut,
+                Overline = _overline
+            };
+            line.Cells.Insert(_writeCol, newCell);
         }
+        else
+        {
+            // Replace Mode: overwrite existing character (default behavior)
+            // Ensure line has enough cells up to current column
+            while (line.Cells.Count <= _writeCol)
+            {
+                line.Cells.Add(new TerminalCell());
+            }
 
-        var cell = line.Cells[_writeCol];
-        cell.Character = c;
-        cell.ForegroundColor = _foregroundColor;
-        cell.BackgroundColor = _backgroundColor;
-        cell.Bold = _bold;
-        cell.Faint = _faint;
-        cell.Italic = _italic;
-        cell.Underline = _underline;
-        cell.DoubleUnderline = _doubleUnderline;
-        cell.Blink = _blink;
-        cell.Reverse = _reverse;
-        cell.Conceal = _conceal;
-        cell.CrossedOut = _crossedOut;
-        cell.Overline = _overline;
+            var cell = line.Cells[_writeCol];
+            cell.Character = c;
+            cell.ForegroundColor = _foregroundColor;
+            cell.BackgroundColor = _backgroundColor;
+            cell.Bold = _bold;
+            cell.Faint = _faint;
+            cell.Italic = _italic;
+            cell.Underline = _underline;
+            cell.DoubleUnderline = _doubleUnderline;
+            cell.Blink = _blink;
+            cell.Reverse = _reverse;
+            cell.Conceal = _conceal;
+            cell.CrossedOut = _crossedOut;
+            cell.Overline = _overline;
+        }
 
         _writeCol++;
         
@@ -575,9 +884,81 @@ public class Vt100Emulator
 
     private void NewLine()
     {
-        // Start a new line
-        _currentLineIndex = _lines.Count;
-        _lines.Add(new TerminalLine());
+        // Check if we're within a scrolling region
+        bool inScrollRegion = _scrollRegionTop >= 0 && _scrollRegionBottom >= _scrollRegionTop;
+        
+        if (inScrollRegion)
+        {
+            // Calculate the screen-relative position (last _rows lines are the "screen")
+            int screenStartIndex = Math.Max(0, _lines.Count - _rows);
+            int screenRelativeCursorRow = _currentLineIndex - screenStartIndex;
+            
+            // Check if cursor is at or beyond the bottom of the scrolling region (in screen coordinates)
+            if (screenRelativeCursorRow >= _scrollRegionBottom)
+            {
+                // We're at or past the bottom of the scrolling region
+                // Scroll the region up by removing the top line of the region (in screen coordinates)
+                int absoluteTopLineIndex = screenStartIndex + _scrollRegionTop;
+                
+                if (absoluteTopLineIndex < _lines.Count && absoluteTopLineIndex >= 0)
+                {
+                    _lines.RemoveAt(absoluteTopLineIndex);
+                    // Adjust current line index since we removed a line
+                    if (_currentLineIndex > absoluteTopLineIndex)
+                    {
+                        _currentLineIndex--;
+                    }
+                    else if (_currentLineIndex == absoluteTopLineIndex)
+                    {
+                        // Cursor was at the top of the region, stay at the same screen-relative position
+                        _currentLineIndex = absoluteTopLineIndex;
+                    }
+                }
+                
+                // Create new line at the bottom of the scrolling region (in screen coordinates)
+                int newScreenStartIndex = Math.Max(0, _lines.Count - _rows);
+                int absoluteBottomLineIndex = newScreenStartIndex + _scrollRegionBottom;
+                _currentLineIndex = absoluteBottomLineIndex;
+                
+                if (_currentLineIndex >= _lines.Count)
+                {
+                    _lines.Add(new TerminalLine());
+                }
+                else if (_currentLineIndex >= 0)
+                {
+                    // Replace the line at the bottom of the scrolling region
+                    _lines[_currentLineIndex] = new TerminalLine();
+                }
+                else
+                {
+                    // Fallback: just add a new line
+                    _currentLineIndex = _lines.Count;
+                    _lines.Add(new TerminalLine());
+                }
+            }
+            else
+            {
+                // We're within the scrolling region but not at the bottom
+                // Just move to the next line
+                _currentLineIndex++;
+                if (_currentLineIndex >= _lines.Count)
+                {
+                    _lines.Add(new TerminalLine());
+                }
+                else
+                {
+                    // Clear the line we're moving to
+                    _lines[_currentLineIndex] = new TerminalLine();
+                }
+            }
+        }
+        else
+        {
+            // No scrolling region - normal behavior: just add a new line
+            _currentLineIndex = _lines.Count;
+            _lines.Add(new TerminalLine());
+        }
+        
         _writeCol = 0;
         CursorMoved?.Invoke(this, EventArgs.Empty);
         ScreenChanged?.Invoke(this, EventArgs.Empty);
