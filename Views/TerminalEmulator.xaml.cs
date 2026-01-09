@@ -307,9 +307,7 @@ public partial class TerminalEmulator : UserControl
     private void OnDataReceived(object? sender, string data)
     {
         var escapedData = EscapeString(data);
-        Debug.WriteLine($"[TerminalEmulator] OnDataReceived: \"{escapedData}\" ({data.Length} bytes)");
-        System.Console.WriteLine($"[TerminalEmulator] OnDataReceived: \"{escapedData}\" ({data.Length} bytes)");
-        
+
         Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
         {
             if (_emulator != null)
@@ -660,9 +658,6 @@ public partial class TerminalEmulator : UserControl
             endLineIndex = Math.Min(totalLines, startLineIndex + visibleRows);
         }
 
-        Debug.WriteLine($"[TerminalEmulator] RenderScreen: totalLines={totalLines}, visibleRows={visibleRows}, scrollOffset={_scrollOffset}, startLine={startLineIndex}, endLine={endLineIndex}, cursor=({currentCursorRow},{currentCursorCol})");
-        System.Console.WriteLine($"[TerminalEmulator] RenderScreen: totalLines={totalLines}, visibleRows={visibleRows}, scrollOffset={_scrollOffset}, startLine={startLineIndex}, endLine={endLineIndex}, cursor=({currentCursorRow},{currentCursorCol})");
-
         // Render only visible lines, positioned relative to viewport (row 0 at top of viewport)
         for (int lineIndex = startLineIndex; lineIndex < endLineIndex; lineIndex++)
         {
@@ -714,9 +709,6 @@ public partial class TerminalEmulator : UserControl
         // Only render as many cells as fit in the viewport
         var maxCol = Math.Min(line.Cells.Count, visibleCols);
         
-        Debug.WriteLine($"[TerminalEmulator] RenderLine: lineIndex={lineIndex}, viewportRow={viewportRow}, cells={line.Cells.Count}, maxCol={maxCol}, y={y}");
-        System.Console.WriteLine($"[TerminalEmulator] RenderLine: lineIndex={lineIndex}, viewportRow={viewportRow}, cells={line.Cells.Count}, maxCol={maxCol}, y={y}");
-        
         var currentFg = -1;
         var currentBg = -1;
         var currentBold = false;
@@ -760,21 +752,18 @@ public partial class TerminalEmulator : UserControl
                     textRun = ""; // Clear textRun after rendering
                 }
 
-                if (!isLastCell)
-                {
-                    textRun = cell.Character.ToString();
-                    textRunStartCol = col;
-                    currentFg = fg;
-                    currentBg = bg;
-                    currentBold = bold;
-                    currentItalic = italic;
-                    currentUnderline = underline;
-                    currentFaint = faint;
-                    currentCrossedOut = crossedOut;
-                    currentDoubleUnderline = doubleUnderline;
-                    currentOverline = overline;
-                    currentConceal = conceal;
-                }
+                textRun = cell.Character.ToString();
+                textRunStartCol = col;
+                currentFg = fg;
+                currentBg = bg;
+                currentBold = bold;
+                currentItalic = italic;
+                currentUnderline = underline;
+                currentFaint = faint;
+                currentCrossedOut = crossedOut;
+                currentDoubleUnderline = doubleUnderline;
+                currentOverline = overline;
+                currentConceal = conceal;
             }
             else
             {
@@ -782,7 +771,7 @@ public partial class TerminalEmulator : UserControl
             }
         }
 
-        // Render any remaining textRun (should be empty if isLastCell was handled correctly)
+        // Render any remaining textRun
         if (!string.IsNullOrEmpty(textRun))
         {
             RenderTextSegment(x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, lineIndex);
@@ -838,9 +827,6 @@ public partial class TerminalEmulator : UserControl
             return;
         }
         
-        Debug.WriteLine($"[TerminalEmulator] RenderTextSegment: lineIndex={lineIndex}, x={x}, y={y}, text=\"{EscapeString(text)}\", length={text.Length}");
-        System.Console.WriteLine($"[TerminalEmulator] RenderTextSegment: lineIndex={lineIndex}, x={x}, y={y}, text=\"{EscapeString(text)}\", length={text.Length}");
-
         var foreground = GetColor(fgColor);
         var background = GetColor(bgColor);
         var fontWeight = bold ? FontWeights.Bold : FontWeights.Normal;
@@ -1705,22 +1691,23 @@ public partial class TerminalEmulator : UserControl
         }
         else if (key == Key.Up)
         {
-            sequence = "\x1B[A";
+            // DECCKM mode: true = cursor mode (ESC [), false = application mode (ESC O)
+            sequence = _emulator != null && _emulator.CursorKeyMode ? "\x1B[A" : "\x1BOA";
             e.Handled = true;
         }
         else if (key == Key.Down)
         {
-            sequence = "\x1B[B";
+            sequence = _emulator != null && _emulator.CursorKeyMode ? "\x1B[B" : "\x1BOB";
             e.Handled = true;
         }
         else if (key == Key.Right)
         {
-            sequence = "\x1B[C";
+            sequence = _emulator != null && _emulator.CursorKeyMode ? "\x1B[C" : "\x1BOC";
             e.Handled = true;
         }
         else if (key == Key.Left)
         {
-            sequence = "\x1B[D";
+            sequence = _emulator != null && _emulator.CursorKeyMode ? "\x1B[D" : "\x1BOD";
             e.Handled = true;
         }
         else if (key == Key.Escape)

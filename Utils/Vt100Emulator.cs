@@ -52,11 +52,30 @@ public class Vt100Emulator
     private bool _doubleUnderline = false;
     private bool _overline = false;
     private bool _bracketedPasteMode = false;
+    private bool _cursorKeyMode = false; // DECCKM: false = application mode (ESC O), true = cursor mode (ESC [)
+    
+    // Alternate screen buffer state
+    private List<TerminalLine>? _savedMainScreenLines = null;
+    private int _savedMainScreenLineIndex = -1;
+    private int _savedMainScreenWriteCol = 0;
+    private int _savedMainScreenForegroundColor = 7;
+    private int _savedMainScreenBackgroundColor = 0;
+    private bool _savedMainScreenBold = false;
+    private bool _savedMainScreenFaint = false;
+    private bool _savedMainScreenItalic = false;
+    private bool _savedMainScreenUnderline = false;
+    private bool _savedMainScreenBlink = false;
+    private bool _savedMainScreenReverse = false;
+    private bool _savedMainScreenConceal = false;
+    private bool _savedMainScreenCrossedOut = false;
+    private bool _savedMainScreenDoubleUnderline = false;
+    private bool _savedMainScreenOverline = false;
 
     public int Rows => _rows;
     public int Cols => _cols;
     public int LineCount => _lines.Count;
     public bool BracketedPasteMode => _bracketedPasteMode;
+    public bool CursorKeyMode => _cursorKeyMode;
     
     // Stub properties for UI compatibility
     public int CursorRow => _currentLineIndex >= 0 ? _currentLineIndex : 0;
@@ -220,6 +239,16 @@ public class Vt100Emulator
         {
             ProcessModeChange(p[0], final == 'h');
         }
+        // Process Erase in Display (J) command
+        else if (final == 'J')
+        {
+            ProcessEraseInDisplay(p);
+        }
+        // Process Erase in Line (K) command
+        else if (final == 'K')
+        {
+            ProcessEraseInLine(p);
+        }
         else
         {
             // Warn about unhandled CSI commands
@@ -236,6 +265,30 @@ public class Vt100Emulator
     {
         switch (mode)
         {
+            case 1:
+                // DECCKM - Cursor Key Mode
+                // When enabled (set=true): cursor keys send ESC [ A/B/C/D (cursor mode)
+                // When disabled (set=false): cursor keys send ESC O A/B/C/D (application mode - default)
+                _cursorKeyMode = set;
+                Debug.WriteLine($"[Vt100Emulator] Cursor Key Mode (DECCKM): {(set ? "cursor mode (ESC [)" : "application mode (ESC O)")}");
+                System.Console.WriteLine($"[Vt100Emulator] Cursor Key Mode (DECCKM): {(set ? "cursor mode (ESC [)" : "application mode (ESC O)")}");
+                break;
+            case 1049:
+                // DECALTB - Alternate Screen Buffer
+                // When enabled (set=true): save main screen state and switch to alternate buffer
+                // When disabled (set=false): restore main screen state
+                if (set)
+                {
+                    SaveMainScreenState();
+                    SwitchToAlternateScreen();
+                }
+                else
+                {
+                    RestoreMainScreenState();
+                }
+                Debug.WriteLine($"[Vt100Emulator] Alternate Screen Buffer (DECALTB): {(set ? "enabled" : "disabled")}");
+                System.Console.WriteLine($"[Vt100Emulator] Alternate Screen Buffer (DECALTB): {(set ? "enabled" : "disabled")}");
+                break;
             case 2004:
                 // Bracketed paste mode
                 // When enabled (set=true), pasted text should be wrapped with \x1B[200~ and \x1B[201~
@@ -249,6 +302,142 @@ public class Vt100Emulator
                 System.Console.WriteLine($"[Vt100Emulator] Unhandled mode change: mode={mode}, set={set}");
                 break;
         }
+    }
+
+    private void ProcessEraseInDisplay(List<int> parameters)
+    {
+        int param = parameters.Count > 0 ? parameters[0] : 0;
+        
+        if (param == 0)
+        {
+            // Erase from cursor to end of screen
+            EraseFromCursorToEndOfScreen();
+        }
+        else if (param == 1)
+        {
+            // Erase from cursor to beginning of screen
+            EraseFromCursorToBeginningOfScreen();
+        }
+        else if (param == 2)
+        {
+            // Erase entire screen
+            EraseEntireScreen();
+        }
+        else if (param == 3)
+        {
+            // Erase entire screen and scrollback buffer (if supported)
+            // For now, treat same as param 2
+            EraseEntireScreen();
+        }
+        
+        ScreenChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ProcessEraseInLine(List<int> parameters)
+    {
+        int param = parameters.Count > 0 ? parameters[0] : 0;
+        
+        if (_currentLineIndex < 0 || _currentLineIndex >= _lines.Count)
+        {
+            return;
+        }
+        
+        var line = _lines[_currentLineIndex];
+        
+        if (param == 0)
+        {
+            // Erase from cursor to end of line
+            EraseFromCursorToEndOfLine(line);
+        }
+        else if (param == 1)
+        {
+            // Erase from cursor to beginning of line
+            EraseFromCursorToBeginningOfLine(line);
+        }
+        else if (param == 2)
+        {
+            // Erase entire line
+            EraseEntireLine(line);
+        }
+        
+        ScreenChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void EraseFromCursorToEndOfScreen()
+    {
+        if (_currentLineIndex < 0 || _currentLineIndex >= _lines.Count)
+        {
+            return;
+        }
+        
+        // Erase from cursor position to end of current line
+        var currentLine = _lines[_currentLineIndex];
+        EraseFromCursorToEndOfLine(currentLine);
+        
+        // Erase all lines after current line
+        if (_currentLineIndex + 1 < _lines.Count)
+        {
+            _lines.RemoveRange(_currentLineIndex + 1, _lines.Count - (_currentLineIndex + 1));
+        }
+    }
+
+    private void EraseFromCursorToBeginningOfScreen()
+    {
+        if (_currentLineIndex < 0 || _currentLineIndex >= _lines.Count)
+        {
+            return;
+        }
+        
+        // Erase from beginning of current line to cursor position
+        var currentLine = _lines[_currentLineIndex];
+        EraseFromCursorToBeginningOfLine(currentLine);
+        
+        // Erase all lines before current line
+        if (_currentLineIndex > 0)
+        {
+            _lines.RemoveRange(0, _currentLineIndex);
+            _currentLineIndex = 0;
+        }
+    }
+
+    private void EraseEntireScreen()
+    {
+        _lines.Clear();
+        _currentLineIndex = -1;
+        _writeCol = 0;
+    }
+
+    private void EraseFromCursorToEndOfLine(TerminalLine line)
+    {
+        // Erase cells from cursor position to end of line
+        if (_writeCol < line.Cells.Count)
+        {
+            // Truncate line at cursor position
+            line.Cells.RemoveRange(_writeCol, line.Cells.Count - _writeCol);
+        }
+    }
+
+    private void EraseFromCursorToBeginningOfLine(TerminalLine line)
+    {
+        // Erase cells from beginning of line to cursor position
+        if (_writeCol > 0 && _writeCol <= line.Cells.Count)
+        {
+            // Remove cells from start to cursor, then shift remaining cells
+            line.Cells.RemoveRange(0, _writeCol);
+            _writeCol = 0;
+        }
+        else if (_writeCol > line.Cells.Count)
+        {
+            // Cursor is beyond line end, just clear the line
+            line.Cells.Clear();
+            _writeCol = 0;
+        }
+    }
+
+    private void EraseEntireLine(TerminalLine line)
+    {
+        line.Cells.Clear();
+        _writeCol = 0;
     }
 
     private void OnCharacter(object? sender, char c)
@@ -332,6 +521,7 @@ public class Vt100Emulator
                 WriteCharacter(c, suppressScreenChanged: true);
             }
             
+            CursorMoved?.Invoke(this, EventArgs.Empty);
             ScreenChanged?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -649,6 +839,130 @@ public class Vt100Emulator
         _conceal = false;
         _crossedOut = false;
         _overline = false;
+    }
+
+    private void SaveMainScreenState()
+    {
+        // Deep copy the lines
+        _savedMainScreenLines = new List<TerminalLine>();
+        foreach (var line in _lines)
+        {
+            var savedLine = new TerminalLine();
+            foreach (var cell in line.Cells)
+            {
+                var savedCell = new TerminalCell
+                {
+                    Character = cell.Character,
+                    ForegroundColor = cell.ForegroundColor,
+                    BackgroundColor = cell.BackgroundColor,
+                    Bold = cell.Bold,
+                    Faint = cell.Faint,
+                    Italic = cell.Italic,
+                    Underline = cell.Underline,
+                    Blink = cell.Blink,
+                    Reverse = cell.Reverse,
+                    Conceal = cell.Conceal,
+                    CrossedOut = cell.CrossedOut,
+                    DoubleUnderline = cell.DoubleUnderline,
+                    Overline = cell.Overline
+                };
+                savedLine.Cells.Add(savedCell);
+            }
+            _savedMainScreenLines.Add(savedLine);
+        }
+        
+        // Save cursor position and attributes
+        _savedMainScreenLineIndex = _currentLineIndex;
+        _savedMainScreenWriteCol = _writeCol;
+        _savedMainScreenForegroundColor = _foregroundColor;
+        _savedMainScreenBackgroundColor = _backgroundColor;
+        _savedMainScreenBold = _bold;
+        _savedMainScreenFaint = _faint;
+        _savedMainScreenItalic = _italic;
+        _savedMainScreenUnderline = _underline;
+        _savedMainScreenBlink = _blink;
+        _savedMainScreenReverse = _reverse;
+        _savedMainScreenConceal = _conceal;
+        _savedMainScreenCrossedOut = _crossedOut;
+        _savedMainScreenDoubleUnderline = _doubleUnderline;
+        _savedMainScreenOverline = _overline;
+    }
+
+    private void SwitchToAlternateScreen()
+    {
+        // Clear the current screen (alternate buffer starts empty)
+        _lines.Clear();
+        _currentLineIndex = -1;
+        _writeCol = 0;
+        
+        // Reset attributes to defaults
+        ResetAttributes();
+        
+        ScreenChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void RestoreMainScreenState()
+    {
+        if (_savedMainScreenLines == null)
+        {
+            // Nothing was saved, just clear the screen
+            _lines.Clear();
+            _currentLineIndex = -1;
+            _writeCol = 0;
+            ResetAttributes();
+            ScreenChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+        
+        // Restore the saved lines
+        _lines.Clear();
+        foreach (var savedLine in _savedMainScreenLines)
+        {
+            var restoredLine = new TerminalLine();
+            foreach (var savedCell in savedLine.Cells)
+            {
+                var restoredCell = new TerminalCell
+                {
+                    Character = savedCell.Character,
+                    ForegroundColor = savedCell.ForegroundColor,
+                    BackgroundColor = savedCell.BackgroundColor,
+                    Bold = savedCell.Bold,
+                    Faint = savedCell.Faint,
+                    Italic = savedCell.Italic,
+                    Underline = savedCell.Underline,
+                    Blink = savedCell.Blink,
+                    Reverse = savedCell.Reverse,
+                    Conceal = savedCell.Conceal,
+                    CrossedOut = savedCell.CrossedOut,
+                    DoubleUnderline = savedCell.DoubleUnderline,
+                    Overline = savedCell.Overline
+                };
+                restoredLine.Cells.Add(restoredCell);
+            }
+            _lines.Add(restoredLine);
+        }
+        
+        // Restore cursor position and attributes
+        _currentLineIndex = _savedMainScreenLineIndex;
+        _writeCol = _savedMainScreenWriteCol;
+        _foregroundColor = _savedMainScreenForegroundColor;
+        _backgroundColor = _savedMainScreenBackgroundColor;
+        _bold = _savedMainScreenBold;
+        _faint = _savedMainScreenFaint;
+        _italic = _savedMainScreenItalic;
+        _underline = _savedMainScreenUnderline;
+        _blink = _savedMainScreenBlink;
+        _reverse = _savedMainScreenReverse;
+        _conceal = _savedMainScreenConceal;
+        _crossedOut = _savedMainScreenCrossedOut;
+        _doubleUnderline = _savedMainScreenDoubleUnderline;
+        _overline = _savedMainScreenOverline;
+        
+        // Clear saved state
+        _savedMainScreenLines = null;
+        
+        CursorMoved?.Invoke(this, EventArgs.Empty);
+        ScreenChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private static string GetControlCharName(char c)
