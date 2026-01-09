@@ -231,6 +231,7 @@
             <StackPanel Margin="10">
                 <CheckBox x:Name="ResetScrollOnUserInputCheckBox" Content="Reset Scroll Position on User Input" Margin="0,5" IsChecked="True"/>
                 <CheckBox x:Name="ResetScrollOnServerOutputCheckBox" Content="Reset Scroll Position on Server Output" Margin="0,5" IsChecked="False"/>
+                <CheckBox x:Name="AllowTitleChangeCheckBox" Content="Allow Server to Change Window Title" Margin="0,5" IsChecked="False"/>
                 <Grid Margin="0,5">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="120"/>

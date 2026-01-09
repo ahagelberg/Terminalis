@@ -57,12 +57,22 @@ public partial class TerminalTabItem : TabItem
         connection.ConnectionClosed += OnConnectionClosed;
         connection.ErrorOccurred += OnErrorOccurred;
         
-        TerminalControl.AttachConnection(connection, config?.LineEnding, config?.FontFamily, config?.FontSize, config?.ForegroundColor, config?.BackgroundColor, config?.BellNotification, config?.ResetScrollOnUserInput ?? true, config?.ResetScrollOnServerOutput ?? false, config?.BackspaceKey);
+        TerminalControl.TitleChanged -= TerminalControl_TitleChanged;
+        TerminalControl.AttachConnection(connection, config?.LineEnding, config?.FontFamily, config?.FontSize, config?.ForegroundColor, config?.BackgroundColor, config?.BellNotification, config?.ResetScrollOnUserInput ?? true, config?.ResetScrollOnServerOutput ?? false, config?.BackspaceKey, config?.AllowTitleChange ?? false);
+        TerminalControl.TitleChanged += TerminalControl_TitleChanged;
         
         if (connection.IsConnected)
         {
             UpdateStatusIndicator(ConnectionStatus.Connected);
         }
+    }
+
+    private void TerminalControl_TitleChanged(object? sender, string title)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            TabTitle.Text = title;
+        }));
     }
 
     public void UpdateStatusIndicator(ConnectionStatus status)
@@ -267,6 +277,7 @@ public partial class TerminalTabItem : TabItem
         SessionConfig.ResetScrollOnUserInput = config.ResetScrollOnUserInput;
         SessionConfig.ResetScrollOnServerOutput = config.ResetScrollOnServerOutput;
         SessionConfig.BackspaceKey = config.BackspaceKey;
+        SessionConfig.AllowTitleChange = config.AllowTitleChange;
         
         TerminalControl.UpdateSettings(
             config.LineEnding,
@@ -277,7 +288,8 @@ public partial class TerminalTabItem : TabItem
             config.BellNotification,
             config.ResetScrollOnUserInput,
             config.ResetScrollOnServerOutput,
-            config.BackspaceKey);
+            config.BackspaceKey,
+            config.AllowTitleChange);
         
         ApplyColor(config.Color);
     }

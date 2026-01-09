@@ -346,10 +346,13 @@ public class AnsiParser
         }
         else if (c == 0x07)
         {
+            // BEL terminator - emit OSC command and consume it
             var oscString = _buffer.ToString();
             EmitOscCommand(oscString);
             _state = AnsiState.Normal;
+            _oscEscSeen = false;
             _buffer.Clear();
+            // BEL is consumed, not emitted as character
         }
         else if (c == 0x1B)
         {
@@ -357,19 +360,27 @@ public class AnsiParser
         }
         else if (c >= 0x20 && c <= 0x7E)
         {
+            // Valid OSC string character - accumulate in buffer
             _buffer.Append(c);
         }
         else if (c == '\r' || c == '\n')
         {
+            // CR/LF terminator - emit OSC command and consume it
             var oscString = _buffer.ToString();
             EmitOscCommand(oscString);
             _state = AnsiState.Normal;
+            _oscEscSeen = false;
             _buffer.Clear();
+            // CR/LF are consumed, not emitted as characters
         }
         else
         {
+            // Invalid character in OSC sequence - abort and consume everything
+            // Reset to normal state and clear buffer (don't emit accumulated text)
             _state = AnsiState.Normal;
+            _oscEscSeen = false;
             _buffer.Clear();
+            // Invalid character is also consumed, not emitted
         }
     }
 
@@ -394,6 +405,9 @@ public class AnsiParser
         {
             command.Parameters.Add(0);
         }
+        var escapedOsc = EscapeString(oscString);
+        Debug.WriteLine($"[AnsiParser] Emitting OSC command: code={command.Parameters[0]}, string=\"{escapedOsc}\"");
+        System.Console.WriteLine($"[AnsiParser] Emitting OSC command: code={command.Parameters[0]}, string=\"{escapedOsc}\"");
         CommandReceived?.Invoke(this, command);
     }
 

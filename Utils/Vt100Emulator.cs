@@ -51,10 +51,12 @@ public class Vt100Emulator
     private bool _crossedOut = false;
     private bool _doubleUnderline = false;
     private bool _overline = false;
+    private bool _bracketedPasteMode = false;
 
     public int Rows => _rows;
     public int Cols => _cols;
     public int LineCount => _lines.Count;
+    public bool BracketedPasteMode => _bracketedPasteMode;
     
     // Stub properties for UI compatibility
     public int CursorRow => _currentLineIndex >= 0 ? _currentLineIndex : 0;
@@ -64,6 +66,7 @@ public class Vt100Emulator
     public event EventHandler? ScreenChanged;
     public event EventHandler? CursorMoved;
     public event EventHandler? Bell;
+    public event EventHandler<string>? TitleChanged;
 
     public Vt100Emulator()
     {
@@ -80,6 +83,10 @@ public class Vt100Emulator
 
     public void ProcessData(string data)
     {
+        var escapedData = AnsiParser.EscapeString(data);
+        Debug.WriteLine($"[Vt100Emulator] ProcessData: \"{escapedData}\" ({data.Length} bytes)");
+        System.Console.WriteLine($"[Vt100Emulator] ProcessData: \"{escapedData}\" ({data.Length} bytes)");
+        
         BeginCharacterBatch();
         try
         {
@@ -144,12 +151,15 @@ public class Vt100Emulator
         {
             ProcessCsiCommand(command);
         }
+        else if (command.Type == AnsiCommandType.Osc)
+        {
+            ProcessOscCommand(command);
+        }
         else
         {
             // Warn about unhandled ANSI commands
             string commandDesc = command.Type switch
             {
-                AnsiCommandType.Osc => $"OSC: {command.OscString ?? "empty"}",
                 AnsiCommandType.SingleChar => $"SingleChar escape: ESC{command.FinalChar}",
                 AnsiCommandType.Dcs => "DCS (Device Control String)",
                 _ => $"Unknown command type: {command.Type}"
@@ -159,15 +169,56 @@ public class Vt100Emulator
         }
     }
 
+    private void ProcessOscCommand(AnsiCommand command)
+    {
+        if (command.Parameters.Count == 0 || string.IsNullOrEmpty(command.OscString))
+        {
+            return;
+        }
+
+        int oscCode = command.Parameters[0];
+        string oscString = command.OscString;
+
+        switch (oscCode)
+        {
+            case 0:
+            case 2:
+                // OSC 0: Set window title and icon name
+                // OSC 2: Set window title
+                // Format: ESC]0;<text>BEL or ESC]2;<text>BEL
+                // Always accept these commands (no warning), but TitleChanged event will only fire if allowed by session setting
+                if (oscString.Contains(';'))
+                {
+                    var parts = oscString.Split(';', 2);
+                    if (parts.Length > 1)
+                    {
+                        string title = parts[1];
+                        TitleChanged?.Invoke(this, title);
+                    }
+                }
+                break;
+            default:
+                // Other OSC commands not implemented yet
+                Debug.WriteLine($"[Vt100Emulator] Unhandled OSC command: {oscString} (code: {oscCode})");
+                System.Console.WriteLine($"[Vt100Emulator] Unhandled OSC command: {oscString} (code: {oscCode})");
+                break;
+        }
+    }
+
     private void ProcessCsiCommand(AnsiCommand command)
     {
         var p = command.Parameters;
         var final = command.FinalChar;
 
-        // Only process SGR (m) command for text styles and colors
+        // Process SGR (m) command for text styles and colors
         if (final == 'm')
         {
             ProcessSgr(p);
+        }
+        // Process mode change commands (h/l) for private parameters
+        else if ((final == 'h' || final == 'l') && command.IsPrivate && p.Count > 0)
+        {
+            ProcessModeChange(p[0], final == 'h');
         }
         else
         {
@@ -181,6 +232,25 @@ public class Vt100Emulator
         }
     }
 
+    private void ProcessModeChange(int mode, bool set)
+    {
+        switch (mode)
+        {
+            case 2004:
+                // Bracketed paste mode
+                // When enabled (set=true), pasted text should be wrapped with \x1B[200~ and \x1B[201~
+                // When disabled (set=false), pasted text is sent as-is
+                _bracketedPasteMode = set;
+                Debug.WriteLine($"[Vt100Emulator] Bracketed paste mode: {(set ? "enabled" : "disabled")}");
+                break;
+            default:
+                // Other mode changes not implemented yet
+                Debug.WriteLine($"[Vt100Emulator] Unhandled mode change: mode={mode}, set={set}");
+                System.Console.WriteLine($"[Vt100Emulator] Unhandled mode change: mode={mode}, set={set}");
+                break;
+        }
+    }
+
     private void OnCharacter(object? sender, char c)
     {
         if (_batchingCharacters && c >= 32 && c < 127 && c != '\r' && c != '\n' && c != '\t' && c != '\b' && c != '\x07')
@@ -190,6 +260,10 @@ public class Vt100Emulator
         }
         
         FlushCharacterBatch();
+        
+        var charDisplay = c >= 32 && c < 127 ? $"'{c}'" : $"0x{(int)c:X2}";
+        Debug.WriteLine($"[Vt100Emulator] OnCharacter: {charDisplay} (line={_currentLineIndex}, col={_writeCol})");
+        System.Console.WriteLine($"[Vt100Emulator] OnCharacter: {charDisplay} (line={_currentLineIndex}, col={_writeCol})");
         
         switch (c)
         {
@@ -249,6 +323,8 @@ public class Vt100Emulator
         if (_characterBatch.Length > 0)
         {
             var text = _characterBatch.ToString();
+            Debug.WriteLine($"[Vt100Emulator] FlushCharacterBatch: \"{AnsiParser.EscapeString(text)}\" ({text.Length} chars)");
+            System.Console.WriteLine($"[Vt100Emulator] FlushCharacterBatch: \"{AnsiParser.EscapeString(text)}\" ({text.Length} chars)");
             _characterBatch.Clear();
             
             foreach (var c in text)

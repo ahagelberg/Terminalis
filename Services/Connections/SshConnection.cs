@@ -492,6 +492,10 @@ public class SshConnection : ITerminalConnection
             throw new InvalidOperationException("Connection is not established");
         }
 
+        var escapedData = EscapeString(data);
+        Debug.WriteLine($"[SshConnection] [SEND] ({data.Length} bytes): {escapedData}");
+        System.Console.WriteLine($"[SshConnection] [SEND] ({data.Length} bytes): {escapedData}");
+
         await Task.Run(() =>
         {
             try
@@ -515,6 +519,11 @@ public class SshConnection : ITerminalConnection
         {
             throw new InvalidOperationException("Connection is not established");
         }
+
+        var dataString = Encoding.UTF8.GetString(data);
+        var escapedData = EscapeString(dataString);
+        Debug.WriteLine($"[SshConnection] [SEND] ({data.Length} bytes): {escapedData}");
+        System.Console.WriteLine($"[SshConnection] [SEND] ({data.Length} bytes): {escapedData}");
 
         await Task.Run(() =>
         {
@@ -637,6 +646,9 @@ public class SshConnection : ITerminalConnection
     private void OnShellStreamDataReceived(object? sender, ShellDataEventArgs e)
     {
         var data = Encoding.UTF8.GetString(e.Data);
+        var escapedData = EscapeString(data);
+        Debug.WriteLine($"[SshConnection] [RECV] ({data.Length} bytes): {escapedData}");
+        System.Console.WriteLine($"[SshConnection] [RECV] ({data.Length} bytes): {escapedData}");
         DataReceived?.Invoke(this, data);
     }
 

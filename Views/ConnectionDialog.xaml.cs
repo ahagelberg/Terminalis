@@ -76,6 +76,7 @@ public partial class ConnectionDialog : Window
         CompressionCheckBox.IsChecked = existingConfig.CompressionEnabled;
         ResetScrollOnUserInputCheckBox.IsChecked = existingConfig.ResetScrollOnUserInput;
         ResetScrollOnServerOutputCheckBox.IsChecked = existingConfig.ResetScrollOnServerOutput;
+        AllowTitleChangeCheckBox.IsChecked = existingConfig.AllowTitleChange;
         ScreenSessionNameTextBox.Text = existingConfig.ScreenSessionName ?? string.Empty;
         X11ForwardingCheckBox.IsChecked = existingConfig.X11ForwardingEnabled;
         
@@ -364,6 +365,7 @@ public partial class ConnectionDialog : Window
             CompressionEnabled = CompressionCheckBox.IsChecked == true,
             ResetScrollOnUserInput = ResetScrollOnUserInputCheckBox.IsChecked == true,
             ResetScrollOnServerOutput = ResetScrollOnServerOutputCheckBox.IsChecked == true,
+            AllowTitleChange = AllowTitleChangeCheckBox.IsChecked == true,
             ScreenSessionName = string.IsNullOrWhiteSpace(ScreenSessionNameTextBox.Text) ? null : ScreenSessionNameTextBox.Text.Trim(),
             X11ForwardingEnabled = X11ForwardingCheckBox.IsChecked == true,
             BellNotification = BellNotificationComboBox.SelectedIndex switch

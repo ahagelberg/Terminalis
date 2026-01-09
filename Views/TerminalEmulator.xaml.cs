@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -41,6 +42,7 @@ public partial class TerminalEmulator : UserControl
     private bool _resetScrollOnServerOutput = false;
     private DateTime _lastInputSentTime = DateTime.MinValue;
     private string _backspaceKey = "DEL";
+    private bool _allowTitleChange = false;
 
     public TerminalEmulator()
     {
@@ -67,7 +69,7 @@ public partial class TerminalEmulator : UserControl
         _renderTimer.Tick += RenderTimer_Tick;
     }
 
-    public void AttachConnection(ITerminalConnection connection, string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool resetScrollOnUserInput = true, bool resetScrollOnServerOutput = false, string? backspaceKey = null)
+    public void AttachConnection(ITerminalConnection connection, string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool resetScrollOnUserInput = true, bool resetScrollOnServerOutput = false, string? backspaceKey = null, bool allowTitleChange = false)
     {
         if (_connection != null)
         {
@@ -83,12 +85,14 @@ public partial class TerminalEmulator : UserControl
         _resetScrollOnUserInput = resetScrollOnUserInput;
         _resetScrollOnServerOutput = resetScrollOnServerOutput;
         _backspaceKey = backspaceKey ?? "DEL";
+        _allowTitleChange = allowTitleChange;
 
         if (_emulator != null)
         {
             _emulator.Bell -= OnBell;
             _emulator.ScreenChanged -= OnScreenChanged;
             _emulator.CursorMoved -= OnCursorMoved;
+            _emulator.TitleChanged -= OnTitleChanged;
         }
 
         _emulator = new Vt100Emulator();
@@ -96,6 +100,7 @@ public partial class TerminalEmulator : UserControl
         _emulator.ScreenChanged += OnScreenChanged;
         _emulator.CursorMoved += OnCursorMoved;
         _emulator.Bell += OnBell;
+        _emulator.TitleChanged += OnTitleChanged;
 
         InitializeFont(fontFamily ?? "Consolas", fontSize ?? DEFAULT_FONT_SIZE);
 
@@ -178,7 +183,7 @@ public partial class TerminalEmulator : UserControl
         _fontSize = fontSize;
     }
 
-    public void UpdateSettings(string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool? resetScrollOnUserInput = null, bool? resetScrollOnServerOutput = null, string? backspaceKey = null)
+    public void UpdateSettings(string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool? resetScrollOnUserInput = null, bool? resetScrollOnServerOutput = null, string? backspaceKey = null, bool? allowTitleChange = null)
     {
         bool fontChanged = false;
         
@@ -235,6 +240,11 @@ public partial class TerminalEmulator : UserControl
         if (backspaceKey != null)
         {
             _backspaceKey = backspaceKey;
+        }
+        
+        if (allowTitleChange.HasValue)
+        {
+            _allowTitleChange = allowTitleChange.Value;
         }
         
         if (fontChanged)
@@ -304,6 +314,10 @@ public partial class TerminalEmulator : UserControl
 
     private void OnDataReceived(object? sender, string data)
     {
+        var escapedData = EscapeString(data);
+        Debug.WriteLine($"[TerminalEmulator] OnDataReceived: \"{escapedData}\" ({data.Length} bytes)");
+        System.Console.WriteLine($"[TerminalEmulator] OnDataReceived: \"{escapedData}\" ({data.Length} bytes)");
+        
         Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
         {
             if (_emulator != null)
@@ -395,6 +409,17 @@ public partial class TerminalEmulator : UserControl
         ScheduleRender();
     }
 
+    public event EventHandler<string>? TitleChanged;
+
+    private void OnTitleChanged(object? sender, string title)
+    {
+        // Only fire the event if title changes are allowed by the session setting
+        if (_allowTitleChange)
+        {
+            TitleChanged?.Invoke(this, title);
+        }
+    }
+
     private void ScheduleRender()
     {
         _pendingRender = true;
@@ -410,7 +435,11 @@ public partial class TerminalEmulator : UserControl
         if (_pendingRender)
         {
             _pendingRender = false;
+            Debug.WriteLine($"[TerminalEmulator] RenderTimer_Tick: Calling RenderScreen, canvas children before: {TerminalCanvas.Children.Count}");
+            System.Console.WriteLine($"[TerminalEmulator] RenderTimer_Tick: Calling RenderScreen, canvas children before: {TerminalCanvas.Children.Count}");
             RenderScreen();
+            Debug.WriteLine($"[TerminalEmulator] RenderTimer_Tick: RenderScreen completed, canvas children after: {TerminalCanvas.Children.Count}");
+            System.Console.WriteLine($"[TerminalEmulator] RenderTimer_Tick: RenderScreen completed, canvas children after: {TerminalCanvas.Children.Count}");
         }
     }
 
@@ -654,6 +683,9 @@ public partial class TerminalEmulator : UserControl
             endLineIndex = Math.Min(totalLines, startLineIndex + visibleRows);
         }
 
+        Debug.WriteLine($"[TerminalEmulator] RenderScreen: totalLines={totalLines}, visibleRows={visibleRows}, scrollOffset={_scrollOffset}, startLine={startLineIndex}, endLine={endLineIndex}, cursor=({currentCursorRow},{currentCursorCol})");
+        System.Console.WriteLine($"[TerminalEmulator] RenderScreen: totalLines={totalLines}, visibleRows={visibleRows}, scrollOffset={_scrollOffset}, startLine={startLineIndex}, endLine={endLineIndex}, cursor=({currentCursorRow},{currentCursorCol})");
+
         // Render only visible lines, positioned relative to viewport (row 0 at top of viewport)
         for (int lineIndex = startLineIndex; lineIndex < endLineIndex; lineIndex++)
         {
@@ -705,6 +737,9 @@ public partial class TerminalEmulator : UserControl
         // Only render as many cells as fit in the viewport
         var maxCol = Math.Min(line.Cells.Count, visibleCols);
         
+        Debug.WriteLine($"[TerminalEmulator] RenderLine: lineIndex={lineIndex}, viewportRow={viewportRow}, cells={line.Cells.Count}, maxCol={maxCol}, y={y}");
+        System.Console.WriteLine($"[TerminalEmulator] RenderLine: lineIndex={lineIndex}, viewportRow={viewportRow}, cells={line.Cells.Count}, maxCol={maxCol}, y={y}");
+        
         var currentFg = -1;
         var currentBg = -1;
         var currentBold = false;
@@ -745,6 +780,7 @@ public partial class TerminalEmulator : UserControl
                 {
                     RenderTextSegment(x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, lineIndex);
                     x += textRun.Length * _charWidth;
+                    textRun = ""; // Clear textRun after rendering
                 }
 
                 if (!isLastCell)
@@ -769,6 +805,7 @@ public partial class TerminalEmulator : UserControl
             }
         }
 
+        // Render any remaining textRun (should be empty if isLastCell was handled correctly)
         if (!string.IsNullOrEmpty(textRun))
         {
             RenderTextSegment(x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, lineIndex);
@@ -823,6 +860,9 @@ public partial class TerminalEmulator : UserControl
         {
             return;
         }
+        
+        Debug.WriteLine($"[TerminalEmulator] RenderTextSegment: lineIndex={lineIndex}, x={x}, y={y}, text=\"{EscapeString(text)}\", length={text.Length}");
+        System.Console.WriteLine($"[TerminalEmulator] RenderTextSegment: lineIndex={lineIndex}, x={x}, y={y}, text=\"{EscapeString(text)}\", length={text.Length}");
 
         var foreground = GetColor(fgColor);
         var background = GetColor(bgColor);
@@ -1517,11 +1557,18 @@ public partial class TerminalEmulator : UserControl
                 {
                     _lastInputSentTime = DateTime.Now;
                     
+                    // Wrap pasted text with bracketed paste sequences if mode is enabled
+                    string textToSend = text;
+                    if (_emulator != null && _emulator.BracketedPasteMode)
+                    {
+                        textToSend = "\x1B[200~" + text + "\x1B[201~";
+                    }
+                    
                     _ = Task.Run(async () =>
                     {
                         try
                         {
-                            await _connection.WriteAsync(text);
+                            await _connection.WriteAsync(textToSend);
                         }
                         catch
                         {
