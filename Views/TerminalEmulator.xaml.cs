@@ -17,7 +17,6 @@ public partial class TerminalEmulator : UserControl
 {
     private const int DEFAULT_FONT_SIZE = 12;
     private const int DEFAULT_SCROLLBACK_LINES = 20000;
-    private const int RENDER_THROTTLE_MS = 33; // ~30 FPS for smoother scrolling
     private const int SCROLL_LINES_PER_TICK = 3;
     private const int ECHO_DETECTION_WINDOW_MS = 100; // Time window to detect echoed user input
 
@@ -28,8 +27,6 @@ public partial class TerminalEmulator : UserControl
     private double _charHeight;
     private double _fontSize = DEFAULT_FONT_SIZE;
     private int _scrollOffset = 0;
-    private DispatcherTimer? _renderTimer;
-    private bool _pendingRender = false;
     private bool _isSelecting = false;
     private bool _hasSelection = false;
     private int? _selectionStartRow;
@@ -59,14 +56,9 @@ public partial class TerminalEmulator : UserControl
         KeyUp += TerminalEmulator_KeyUp;
         MouseWheel += TerminalEmulator_MouseWheel;
         ContextMenuOpening += TerminalEmulator_ContextMenuOpening;
+        IsVisibleChanged += TerminalEmulator_IsVisibleChanged;
         ContextMenu = null;
         Focusable = true;
-        
-        _renderTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(RENDER_THROTTLE_MS)
-        };
-        _renderTimer.Tick += RenderTimer_Tick;
     }
 
     public void AttachConnection(ITerminalConnection connection, string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool resetScrollOnUserInput = true, bool resetScrollOnServerOutput = false, string? backspaceKey = null, bool allowTitleChange = false)
@@ -398,7 +390,7 @@ public partial class TerminalEmulator : UserControl
                 UpdateCanvasTransform();
             }
         }
-        ScheduleRender();
+        RenderScreen();
     }
 
     private int _previousCursorRow = -1;
@@ -406,7 +398,7 @@ public partial class TerminalEmulator : UserControl
 
     private void OnCursorMoved(object? sender, EventArgs e)
     {
-        ScheduleRender();
+        RenderScreen();
     }
 
     public event EventHandler<string>? TitleChanged;
@@ -420,26 +412,11 @@ public partial class TerminalEmulator : UserControl
         }
     }
 
-    private void ScheduleRender()
+    private void TerminalEmulator_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        _pendingRender = true;
-        if (!_renderTimer!.IsEnabled)
+        if (e.NewValue is bool isVisible && isVisible)
         {
-            _renderTimer.Start();
-        }
-    }
-
-    private void RenderTimer_Tick(object? sender, EventArgs e)
-    {
-        _renderTimer!.Stop();
-        if (_pendingRender)
-        {
-            _pendingRender = false;
-            Debug.WriteLine($"[TerminalEmulator] RenderTimer_Tick: Calling RenderScreen, canvas children before: {TerminalCanvas.Children.Count}");
-            System.Console.WriteLine($"[TerminalEmulator] RenderTimer_Tick: Calling RenderScreen, canvas children before: {TerminalCanvas.Children.Count}");
             RenderScreen();
-            Debug.WriteLine($"[TerminalEmulator] RenderTimer_Tick: RenderScreen completed, canvas children after: {TerminalCanvas.Children.Count}");
-            System.Console.WriteLine($"[TerminalEmulator] RenderTimer_Tick: RenderScreen completed, canvas children after: {TerminalCanvas.Children.Count}");
         }
     }
 
@@ -1254,7 +1231,7 @@ public partial class TerminalEmulator : UserControl
                 _selectionEndRow = lineIndex;
                 _selectionEndCol = col;
                 
-                ScheduleRender();
+                RenderScreen();
                 
                 // Capture mouse and set cursor
                 CaptureMouse();
@@ -1326,7 +1303,7 @@ public partial class TerminalEmulator : UserControl
             {
                 _selectionEndRow = lineIndex;
                 _selectionEndCol = col;
-                ScheduleRender();
+                RenderScreen();
             }
             
             Cursor = Cursors.IBeam;
@@ -1434,7 +1411,7 @@ public partial class TerminalEmulator : UserControl
         _hasSelection = true;
         _isSelecting = false;
         
-        ScheduleRender();
+        RenderScreen();
     }
     
     private void SelectLineAt(int lineIndex)
@@ -1452,7 +1429,7 @@ public partial class TerminalEmulator : UserControl
         _hasSelection = true;
         _isSelecting = false;
         
-        ScheduleRender();
+        RenderScreen();
     }
 
     private void CopySelectionToClipboard()
