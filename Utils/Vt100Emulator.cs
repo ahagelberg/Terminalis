@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
+using System.Linq;
 
 namespace TabbySSH.Utils;
 
@@ -24,6 +25,7 @@ public class TerminalCell
 public class TerminalLine
 {
     public List<TerminalCell> Cells { get; } = new();
+    public bool IsDirty { get; set; } = false;
 }
 
 public class Vt100Emulator
@@ -33,10 +35,11 @@ public class Vt100Emulator
 
     private readonly List<TerminalLine> _lines = new();
     private readonly AnsiParser _ansiParser = new();
-    private readonly StringBuilder _characterBatch = new();
-    private bool _batchingCharacters = false;
+    private readonly StringBuilder _textBatch = new();
     private int _currentLineIndex = -1;
     private int _writeCol = 0;
+    private int _textBatchStartRow = -1;
+    private int _textBatchStartCol = -1;
     private int _rows = DEFAULT_ROWS;
     private int _cols = DEFAULT_COLS;
     private int _foregroundColor = 7;
@@ -54,7 +57,9 @@ public class Vt100Emulator
     private bool _bracketedPasteMode = false;
     private bool _cursorKeyMode = false; // DECCKM: false = application mode (ESC O), true = cursor mode (ESC [)
     private bool _insertMode = false; // IRM: false = replace mode (default), true = insert mode
-    private bool _autoWrapMode = true; // DECAWM: true = auto-wrap enabled (default), false = auto-wrap disabled
+    private bool _inAlternateScreen = false;
+    private bool _cursorVisible = true;
+    private bool _autoWrapMode = true;
     
     // Alternate screen buffer state
     private List<TerminalLine>? _savedMainScreenLines = null;
@@ -79,21 +84,111 @@ public class Vt100Emulator
     private int _scrollRegionTop = -1; // -1 means no scrolling region (entire screen scrolls)
     private int _scrollRegionBottom = -1; // -1 means no scrolling region (entire screen scrolls)
 
+#if DEBUG
+    private readonly Dictionary<string, PerformanceMetric> _performanceMetrics = new();
+    
+    private class PerformanceMetric
+    {
+        public long TotalTicks { get; set; }
+        public long CallCount { get; set; }
+        public long MinTicks { get; set; } = long.MaxValue;
+        public long MaxTicks { get; set; }
+        
+        public double AverageMs => CallCount > 0 ? (TotalTicks / (double)TimeSpan.TicksPerMillisecond) / CallCount : 0;
+        public double TotalMs => TotalTicks / (double)TimeSpan.TicksPerMillisecond;
+    }
+    
+    public Dictionary<string, (double avgMs, double totalMs, long calls, double minMs, double maxMs)> GetPerformanceMetrics()
+    {
+        return _performanceMetrics.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (
+                kvp.Value.AverageMs,
+                kvp.Value.TotalMs,
+                kvp.Value.CallCount,
+                kvp.Value.MinTicks / (double)TimeSpan.TicksPerMillisecond,
+                kvp.Value.MaxTicks / (double)TimeSpan.TicksPerMillisecond
+            )
+        );
+    }
+    
+    public void ResetPerformanceMetrics()
+    {
+        _performanceMetrics.Clear();
+    }
+    
+    private void RecordPerformance(string operation, long ticks)
+    {
+        if (!_performanceMetrics.ContainsKey(operation))
+        {
+            _performanceMetrics[operation] = new PerformanceMetric();
+        }
+        var metric = _performanceMetrics[operation];
+        metric.TotalTicks += ticks;
+        metric.CallCount++;
+        if (ticks < metric.MinTicks) metric.MinTicks = ticks;
+        if (ticks > metric.MaxTicks) metric.MaxTicks = ticks;
+    }
+#endif
+
     public int Rows => _rows;
     public int Cols => _cols;
     public int LineCount => _lines.Count;
     public bool BracketedPasteMode => _bracketedPasteMode;
     public bool CursorKeyMode => _cursorKeyMode;
+    public bool InAlternateScreen => _inAlternateScreen;
+    public bool CursorVisible => _cursorVisible;
     
     // Stub properties for UI compatibility
     public int CursorRow => _currentLineIndex >= 0 ? _currentLineIndex : 0;
     public int CursorCol => _writeCol;
     public int ScrollbackLineCount => 0;
+    
+#if DEBUG
+    public TerminalModes Modes => new TerminalModes
+    {
+        InAlternateScreen = _inAlternateScreen,
+        CursorKeyMode = _cursorKeyMode,
+        InsertMode = _insertMode,
+        AutoWrapMode = _autoWrapMode,
+        CursorVisible = _cursorVisible,
+        BracketedPasteMode = _bracketedPasteMode,
+        ScrollRegionTop = _scrollRegionTop,
+        ScrollRegionBottom = _scrollRegionBottom
+    };
+    
+    public void SetMode(string modeName, bool value)
+    {
+        // Stub implementation for debug panel
+    }
+    
+    public void SendAnsiCode(string code)
+    {
+        // Stub implementation for debug panel
+    }
+#endif
 
-    public event EventHandler? ScreenChanged;
-    public event EventHandler? CursorMoved;
     public event EventHandler? Bell;
     public event EventHandler<string>? TitleChanged;
+
+#if DEBUG
+    public bool DebugMode { get; set; }
+    public event EventHandler<DebugCommandEventArgs>? DebugCommandExecuted;
+    
+    public class DebugCommandEventArgs : EventArgs
+    {
+        public string CommandType { get; set; } = string.Empty;
+        public string Parameters { get; set; } = string.Empty;
+        public string ResultingState { get; set; } = string.Empty;
+        public string RawText { get; set; } = string.Empty;
+        public string CommandInterpretation { get; set; } = string.Empty;
+        public int CursorRowBefore { get; set; }
+        public int CursorColBefore { get; set; }
+        public int CursorRowAfter { get; set; }
+        public int CursorColAfter { get; set; }
+        public DateTime Timestamp { get; set; } = DateTime.Now;
+    }
+#endif
 
     public Vt100Emulator()
     {
@@ -110,19 +205,39 @@ public class Vt100Emulator
 
     public void ProcessData(string data)
     {
-        var escapedData = AnsiParser.EscapeString(data);
-        Debug.WriteLine($"[Vt100Emulator] ProcessData: \"{escapedData}\" ({data.Length} bytes)");
-        System.Console.WriteLine($"[Vt100Emulator] ProcessData: \"{escapedData}\" ({data.Length} bytes)");
+#if DEBUG
+        var stopwatch = Stopwatch.StartNew();
+#endif
         
-        BeginCharacterBatch();
-        try
+#if DEBUG
+        // Log raw data received from server (only for small chunks to avoid performance issues)
+        if (DebugMode && !string.IsNullOrEmpty(data) && data.Length <= 100)
         {
-            _ansiParser.ProcessData(data);
+            var escapedData = AnsiParser.EscapeString(data);
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "Raw Data",
+                Parameters = $"length={data.Length} bytes",
+                ResultingState = $"raw data received from server",
+                RawText = data,
+                CommandInterpretation = $"Raw server output: {escapedData}",
+                CursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0,
+                CursorColBefore = _writeCol,
+                CursorRowAfter = _currentLineIndex >= 0 ? _currentLineIndex : 0,
+                CursorColAfter = _writeCol
+            };
+            DebugCommandExecuted?.Invoke(this, args);
         }
-        finally
-        {
-            EndCharacterBatch();
-        }
+#endif
+        
+        // Process data in order as it arrives - no batching, no reordering
+        // This ensures commands and text are processed in the exact order they appear
+        _ansiParser.ProcessData(data);
+        
+#if DEBUG
+        stopwatch.Stop();
+        RecordPerformance("ProcessData", stopwatch.ElapsedTicks);
+#endif
     }
 
     public TerminalLine? GetLine(int lineIndex)
@@ -172,8 +287,53 @@ public class Vt100Emulator
         return sb.ToString();
     }
 
+    public HashSet<int> GetDirtyLines()
+    {
+        var dirtyLines = new HashSet<int>();
+        for (int i = 0; i < _lines.Count; i++)
+        {
+            if (_lines[i].IsDirty)
+            {
+                dirtyLines.Add(i);
+            }
+        }
+        return dirtyLines;
+    }
+
+    public void ClearDirtyLines()
+    {
+        foreach (var line in _lines)
+        {
+            line.IsDirty = false;
+        }
+    }
+
+    private void MarkLineDirty(int lineIndex)
+    {
+        if (lineIndex >= 0 && lineIndex < _lines.Count)
+        {
+            _lines[lineIndex].IsDirty = true;
+        }
+    }
+
+    private void MarkLineDirty(TerminalLine? line)
+    {
+        if (line != null)
+        {
+            line.IsDirty = true;
+        }
+    }
+
     private void OnAnsiCommand(object? sender, AnsiCommand command)
     {
+#if DEBUG
+        var stopwatch = Stopwatch.StartNew();
+#endif
+        
+        // Flush any pending text batch before processing command
+        // This ensures text is processed before the command that follows it
+        FlushTextBatch();
+        
         if (command.Type == AnsiCommandType.Csi)
         {
             ProcessCsiCommand(command);
@@ -196,8 +356,13 @@ public class Vt100Emulator
                 _ => $"Unknown command type: {command.Type}"
             };
             Debug.WriteLine($"[Vt100Emulator] ***Unhandled ANSI command: {commandDesc}");
-            System.Console.WriteLine($"[Vt100Emulator] ***Unhandled ANSI command: {commandDesc}");
+            // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled ANSI command: {commandDesc}");
         }
+        
+#if DEBUG
+        stopwatch.Stop();
+        RecordPerformance("OnAnsiCommand", stopwatch.ElapsedTicks);
+#endif
     }
 
     private void ProcessOscCommand(AnsiCommand command)
@@ -226,7 +391,7 @@ public class Vt100Emulator
                         string title = parts[1];
                         _currentTitle = title;
                         Debug.WriteLine($"[Vt100Emulator] Handled OSC command: ESC]{oscCode};{title} (Set window title)");
-                        System.Console.WriteLine($"[Vt100Emulator] Handled OSC command: ESC]{oscCode};{title} (Set window title)");
+                        // System.Console.WriteLine($"[Vt100Emulator] Handled OSC command: ESC]{oscCode};{title} (Set window title)");
                         TitleChanged?.Invoke(this, title);
                     }
                 }
@@ -234,7 +399,7 @@ public class Vt100Emulator
             default:
                 // Other OSC commands not implemented yet
                 Debug.WriteLine($"[Vt100Emulator] ***Unhandled OSC command: {oscString} (code: {oscCode})");
-                System.Console.WriteLine($"[Vt100Emulator] ***Unhandled OSC command: {oscString} (code: {oscCode})");
+                // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled OSC command: {oscString} (code: {oscCode})");
                 break;
         }
     }
@@ -247,12 +412,7 @@ public class Vt100Emulator
         // Process SGR (m) command for text styles and colors
         if (final == 'm')
         {
-            var paramStr = p.Count > 0 ? string.Join(";", p) : "";
-            var commandStr = $"\x1B[{paramStr}m";
-            var escapedStr = AnsiParser.EscapeString(commandStr);
-            Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (SGR - Select Graphic Rendition)");
-            System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (SGR - Select Graphic Rendition)");
-            ProcessSgr(p);
+            ProcessSgr(p, command);
         }
         // Process mode change commands (h/l)
         else if ((final == 'h' || final == 'l') && p.Count > 0)
@@ -264,7 +424,7 @@ public class Vt100Emulator
                 var commandStr = $"\x1B[?{paramStr}{final}";
                 var escapedStr = AnsiParser.EscapeString(commandStr);
                 Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (DEC Mode change: mode={p[0]}, set={final == 'h'})");
-                System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (DEC Mode change: mode={p[0]}, set={final == 'h'})");
+                // System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (DEC Mode change: mode={p[0]}, set={final == 'h'})");
                 ProcessDecModeChange(p[0], final == 'h');
             }
             else
@@ -274,7 +434,7 @@ public class Vt100Emulator
                 var commandStr = $"\x1B[{paramStr}{final}";
                 var escapedStr = AnsiParser.EscapeString(commandStr);
                 Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (ANSI Mode change: mode={p[0]}, set={final == 'h'})");
-                System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (ANSI Mode change: mode={p[0]}, set={final == 'h'})");
+                // System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (ANSI Mode change: mode={p[0]}, set={final == 'h'})");
                 ProcessAnsiModeChange(p[0], final == 'h');
             }
         }
@@ -285,7 +445,7 @@ public class Vt100Emulator
             var commandStr = $"\x1B[{paramStr}J";
             var escapedStr = AnsiParser.EscapeString(commandStr);
             Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Display)");
-            System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Display)");
+            // System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Display)");
             ProcessEraseInDisplay(p);
         }
         // Process Erase in Line (K) command
@@ -295,7 +455,7 @@ public class Vt100Emulator
             var commandStr = $"\x1B[{paramStr}K";
             var escapedStr = AnsiParser.EscapeString(commandStr);
             Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Line)");
-            System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Line)");
+            // System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Line)");
             ProcessEraseInLine(p);
         }
         // Process Window Manipulation (t) commands
@@ -305,7 +465,7 @@ public class Vt100Emulator
             var commandStr = $"\x1B[{paramStr}t";
             var escapedStr = AnsiParser.EscapeString(commandStr);
             Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Window Manipulation)");
-            System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Window Manipulation)");
+            // System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Window Manipulation)");
             ProcessWindowManipulation(p);
         }
         // Process Set Scrolling Region (r) command
@@ -315,8 +475,83 @@ public class Vt100Emulator
             var commandStr = $"\x1B[{paramStr}r";
             var escapedStr = AnsiParser.EscapeString(commandStr);
             Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Set Scrolling Region)");
-            System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Set Scrolling Region)");
+            // System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Set Scrolling Region)");
             ProcessSetScrollingRegion(p);
+        }
+        // Process Cursor Position (H or f) command
+        else if (final == 'H' || final == 'f')
+        {
+            ProcessCursorPosition(p, command);
+        }
+        // Process Vertical Position Absolute (d) command
+        else if (final == 'd')
+        {
+            ProcessVerticalPositionAbsolute(p, command);
+        }
+        // Process Cursor Horizontal Absolute (G) command
+        else if (final == 'G')
+        {
+            ProcessCursorHorizontalAbsolute(p, command);
+        }
+        // Process Cursor Up (A) command
+        else if (final == 'A')
+        {
+            ProcessCursorUp(p, command);
+        }
+        // Process Cursor Down (B) command
+        else if (final == 'B')
+        {
+            ProcessCursorDown(p, command);
+        }
+        // Process Cursor Forward (C) command
+        else if (final == 'C')
+        {
+            ProcessCursorForward(p, command);
+        }
+        // Process Cursor Backward (D) command
+        else if (final == 'D')
+        {
+            ProcessCursorBackward(p, command);
+        }
+        // Process Cursor Next Line (E) command
+        else if (final == 'E')
+        {
+            ProcessCursorNextLine(p, command);
+        }
+        // Process Cursor Previous Line (F) command
+        else if (final == 'F')
+        {
+            ProcessCursorPreviousLine(p, command);
+        }
+        // Process Scroll Up (S) command
+        else if (final == 'S')
+        {
+            ProcessScrollUp(p, command);
+        }
+        // Process Scroll Down (T) command
+        else if (final == 'T')
+        {
+            ProcessScrollDown(p, command);
+        }
+        // Process Delete Line (M) command
+        else if (final == 'M')
+        {
+            ProcessDeleteLine(p, command);
+        }
+        // Process Insert Line (L) command
+        else if (final == 'L')
+        {
+            ProcessInsertLine(p, command);
+        }
+        // Process Delete Character (P) command
+        else if (final == 'P')
+        {
+            ProcessDeleteCharacter(p, command);
+        }
+        // Process Insert Character (@) command
+        else if (final == '@')
+        {
+            ProcessInsertCharacter(p, command);
         }
         else
         {
@@ -326,7 +561,7 @@ public class Vt100Emulator
             var commandStr = $"\x1B[{isPrivate}{paramStr}{final}";
             var escapedStr = AnsiParser.EscapeString(commandStr);
             Debug.WriteLine($"[Vt100Emulator] ***Unhandled CSI command: {escapedStr} (final char: '{final}' (0x{(int)final:X2}), params: [{paramStr}])");
-            System.Console.WriteLine($"[Vt100Emulator] ***Unhandled CSI command: {escapedStr} (final char: '{final}' (0x{(int)final:X2}), params: [{paramStr}])");
+            // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled CSI command: {escapedStr} (final char: '{final}' (0x{(int)final:X2}), params: [{paramStr}])");
         }
     }
 
@@ -339,8 +574,23 @@ public class Vt100Emulator
                 // When enabled (set=true): cursor keys send ESC [ A/B/C/D (cursor mode)
                 // When disabled (set=false): cursor keys send ESC O A/B/C/D (application mode - default)
                 _cursorKeyMode = set;
+#if DEBUG
                 Debug.WriteLine($"[Vt100Emulator] Cursor Key Mode (DECCKM): {(set ? "cursor mode (ESC [)" : "application mode (ESC O)")}");
-                System.Console.WriteLine($"[Vt100Emulator] Cursor Key Mode (DECCKM): {(set ? "cursor mode (ESC [)" : "application mode (ESC O)")}");
+#endif
+                break;
+            case 12:
+                // DECSCLM - Start Blinking Cursor (DEC Smooth Cursor Line Mode)
+                // This mode controls cursor blinking behavior
+                // We track it but don't need to do anything special - cursor visibility is handled by mode 25
+                Debug.WriteLine($"[Vt100Emulator] Start Blinking Cursor (DECSCLM): {(set ? "enabled" : "disabled")}");
+                break;
+            case 25:
+                // DECTCEM - DEC Text Cursor Enable Mode
+                // When enabled (set=true): cursor is visible
+                // When disabled (set=false): cursor is hidden
+                _cursorVisible = set;
+                // Don't fire events - ScreenChanged will be fired at end of ProcessData
+                Debug.WriteLine($"[Vt100Emulator] Cursor Visibility (DECTCEM): {(set ? "visible" : "hidden")}");
                 break;
             case 1049:
                 // DECALTB - Alternate Screen Buffer
@@ -356,15 +606,7 @@ public class Vt100Emulator
                     RestoreMainScreenState();
                 }
                 Debug.WriteLine($"[Vt100Emulator] Alternate Screen Buffer (DECALTB): {(set ? "enabled" : "disabled")}");
-                System.Console.WriteLine($"[Vt100Emulator] Alternate Screen Buffer (DECALTB): {(set ? "enabled" : "disabled")}");
-                break;
-            case 7:
-                // DECAWM - Auto-Wrap Mode
-                // When enabled (set=true): text automatically wraps to next line when cursor reaches right margin
-                // When disabled (set=false): cursor stays at right margin, characters overwrite last character
-                _autoWrapMode = set;
-                Debug.WriteLine($"[Vt100Emulator] Auto-Wrap Mode (DECAWM): {(set ? "enabled (text wraps at right margin)" : "disabled (text doesn't wrap)")}");
-                System.Console.WriteLine($"[Vt100Emulator] Auto-Wrap Mode (DECAWM): {(set ? "enabled (text wraps at right margin)" : "disabled (text doesn't wrap)")}");
+                // System.Console.WriteLine($"[Vt100Emulator] Alternate Screen Buffer (DECALTB): {(set ? "enabled" : "disabled")}");
                 break;
             case 2004:
                 // Bracketed paste mode
@@ -376,7 +618,7 @@ public class Vt100Emulator
             default:
                 // Other DEC mode changes not implemented yet
                 Debug.WriteLine($"[Vt100Emulator] ***Unhandled DEC mode change: mode={mode}, set={set}");
-                System.Console.WriteLine($"[Vt100Emulator] ***Unhandled DEC mode change: mode={mode}, set={set}");
+                // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled DEC mode change: mode={mode}, set={set}");
                 break;
         }
     }
@@ -391,12 +633,12 @@ public class Vt100Emulator
                 // When disabled (set=false): Replace Mode - new characters overwrite existing characters (default)
                 _insertMode = set;
                 Debug.WriteLine($"[Vt100Emulator] Insert/Replace Mode (IRM): {(set ? "Insert Mode (characters shift right)" : "Replace Mode (characters overwrite)")}");
-                System.Console.WriteLine($"[Vt100Emulator] Insert/Replace Mode (IRM): {(set ? "Insert Mode (characters shift right)" : "Replace Mode (characters overwrite)")}");
+                // System.Console.WriteLine($"[Vt100Emulator] Insert/Replace Mode (IRM): {(set ? "Insert Mode (characters shift right)" : "Replace Mode (characters overwrite)")}");
                 break;
             default:
                 // Other ANSI mode changes not implemented yet
                 Debug.WriteLine($"[Vt100Emulator] ***Unhandled ANSI mode change: mode={mode}, set={set}");
-                System.Console.WriteLine($"[Vt100Emulator] ***Unhandled ANSI mode change: mode={mode}, set={set}");
+                // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled ANSI mode change: mode={mode}, set={set}");
                 break;
         }
     }
@@ -414,7 +656,7 @@ public class Vt100Emulator
             _ => $"Unknown erase operation (param={param})"
         };
         Debug.WriteLine($"[Vt100Emulator] Erase in Display: {operation}");
-        System.Console.WriteLine($"[Vt100Emulator] Erase in Display: {operation}");
+        // System.Console.WriteLine($"[Vt100Emulator] Erase in Display: {operation}");
         
         if (param == 0)
         {
@@ -438,7 +680,7 @@ public class Vt100Emulator
             EraseEntireScreen();
         }
         
-        ScreenChanged?.Invoke(this, EventArgs.Empty);
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
 
     private void ProcessEraseInLine(List<int> parameters)
@@ -448,7 +690,7 @@ public class Vt100Emulator
         if (_currentLineIndex < 0 || _currentLineIndex >= _lines.Count)
         {
             Debug.WriteLine($"[Vt100Emulator] Erase in Line: Invalid line index ({_currentLineIndex}), ignoring");
-            System.Console.WriteLine($"[Vt100Emulator] Erase in Line: Invalid line index ({_currentLineIndex}), ignoring");
+            // System.Console.WriteLine($"[Vt100Emulator] Erase in Line: Invalid line index ({_currentLineIndex}), ignoring");
             return;
         }
         
@@ -460,7 +702,7 @@ public class Vt100Emulator
             _ => $"Unknown erase operation (param={param})"
         };
         Debug.WriteLine($"[Vt100Emulator] Erase in Line: {operation}");
-        System.Console.WriteLine($"[Vt100Emulator] Erase in Line: {operation}");
+        // System.Console.WriteLine($"[Vt100Emulator] Erase in Line: {operation}");
         
         var line = _lines[_currentLineIndex];
         
@@ -480,7 +722,7 @@ public class Vt100Emulator
             EraseEntireLine(line);
         }
         
-        ScreenChanged?.Invoke(this, EventArgs.Empty);
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
 
     private void EraseFromCursorToEndOfScreen()
@@ -494,10 +736,21 @@ public class Vt100Emulator
         var currentLine = _lines[_currentLineIndex];
         EraseFromCursorToEndOfLine(currentLine);
         
-        // Erase all lines after current line
-        if (_currentLineIndex + 1 < _lines.Count)
+        if (_inAlternateScreen)
         {
-            _lines.RemoveRange(_currentLineIndex + 1, _lines.Count - (_currentLineIndex + 1));
+            for (int i = _currentLineIndex + 1; i < _rows; i++)
+            {
+                _lines[i].Cells.Clear();
+                MarkLineDirty(i);
+            }
+        }
+        else
+        {
+            // Main screen: remove lines after current line
+            if (_currentLineIndex + 1 < _lines.Count)
+            {
+                _lines.RemoveRange(_currentLineIndex + 1, _lines.Count - (_currentLineIndex + 1));
+            }
         }
     }
 
@@ -512,11 +765,22 @@ public class Vt100Emulator
         var currentLine = _lines[_currentLineIndex];
         EraseFromCursorToBeginningOfLine(currentLine);
         
-        // Erase all lines before current line
-        if (_currentLineIndex > 0)
+        if (_inAlternateScreen)
         {
-            _lines.RemoveRange(0, _currentLineIndex);
-            _currentLineIndex = 0;
+            for (int i = 0; i < _currentLineIndex; i++)
+            {
+                _lines[i].Cells.Clear();
+                MarkLineDirty(i);
+            }
+        }
+        else
+        {
+            // Main screen: remove lines before current line
+            if (_currentLineIndex > 0)
+            {
+                _lines.RemoveRange(0, _currentLineIndex);
+                _currentLineIndex = 0;
+            }
         }
     }
 
@@ -525,6 +789,15 @@ public class Vt100Emulator
         _lines.Clear();
         _currentLineIndex = -1;
         _writeCol = 0;
+        
+        // In alternate screen, maintain buffer size
+        if (_inAlternateScreen)
+        {
+            for (int i = 0; i < _rows; i++)
+            {
+                _lines.Add(new TerminalLine());
+            }
+        }
     }
 
     private void EraseFromCursorToEndOfLine(TerminalLine line)
@@ -534,7 +807,40 @@ public class Vt100Emulator
         {
             // Truncate line at cursor position
             line.Cells.RemoveRange(_writeCol, line.Cells.Count - _writeCol);
+            MarkLineDirty(line);
         }
+    }
+
+    private void CopyLineCells(TerminalLine source, TerminalLine destination)
+    {
+#if DEBUG
+        var stopwatch = Stopwatch.StartNew();
+#endif
+        destination.Cells.Clear();
+        foreach (var cell in source.Cells)
+        {
+            destination.Cells.Add(new TerminalCell
+            {
+                Character = cell.Character,
+                ForegroundColor = cell.ForegroundColor,
+                BackgroundColor = cell.BackgroundColor,
+                Bold = cell.Bold,
+                Faint = cell.Faint,
+                Italic = cell.Italic,
+                Underline = cell.Underline,
+                Blink = cell.Blink,
+                Reverse = cell.Reverse,
+                Conceal = cell.Conceal,
+                CrossedOut = cell.CrossedOut,
+                DoubleUnderline = cell.DoubleUnderline,
+                Overline = cell.Overline
+            });
+        }
+        MarkLineDirty(destination);
+#if DEBUG
+        stopwatch.Stop();
+        RecordPerformance("CopyLineCells", stopwatch.ElapsedTicks);
+#endif
     }
 
     private void EraseFromCursorToBeginningOfLine(TerminalLine line)
@@ -545,12 +851,14 @@ public class Vt100Emulator
             // Remove cells from start to cursor, then shift remaining cells
             line.Cells.RemoveRange(0, _writeCol);
             _writeCol = 0;
+            MarkLineDirty(line);
         }
         else if (_writeCol > line.Cells.Count)
         {
             // Cursor is beyond line end, just clear the line
             line.Cells.Clear();
             _writeCol = 0;
+            MarkLineDirty(line);
         }
     }
 
@@ -558,6 +866,7 @@ public class Vt100Emulator
     {
         line.Cells.Clear();
         _writeCol = 0;
+        MarkLineDirty(line);
     }
 
     private void ProcessWindowManipulation(List<int> parameters)
@@ -576,7 +885,7 @@ public class Vt100Emulator
                 // Save the current title so it can be restored later with operation 23
                 _savedTitle = _currentTitle;
                 Debug.WriteLine($"[Vt100Emulator] Window title saved: \"{_savedTitle ?? "(null)"}\"");
-                System.Console.WriteLine($"[Vt100Emulator] Window title saved: \"{_savedTitle ?? "(null)"}\"");
+                // System.Console.WriteLine($"[Vt100Emulator] Window title saved: \"{_savedTitle ?? "(null)"}\"");
                 break;
             case 23:
                 // Restore window title (xterm extension)
@@ -586,12 +895,12 @@ public class Vt100Emulator
                     _currentTitle = _savedTitle;
                     TitleChanged?.Invoke(this, _savedTitle);
                     Debug.WriteLine($"[Vt100Emulator] Window title restored: \"{_savedTitle}\"");
-                    System.Console.WriteLine($"[Vt100Emulator] Window title restored: \"{_savedTitle}\"");
+                    // System.Console.WriteLine($"[Vt100Emulator] Window title restored: \"{_savedTitle}\"");
                 }
                 else
                 {
                     Debug.WriteLine($"[Vt100Emulator] Window title restore requested but no title was saved");
-                    System.Console.WriteLine($"[Vt100Emulator] Window title restore requested but no title was saved");
+                    // System.Console.WriteLine($"[Vt100Emulator] Window title restore requested but no title was saved");
                 }
                 break;
             default:
@@ -599,7 +908,7 @@ public class Vt100Emulator
                 // Most window manipulation (move, resize, maximize) doesn't apply to client-side terminals
                 var paramStr = parameters.Count > 0 ? string.Join(";", parameters) : "";
                 Debug.WriteLine($"[Vt100Emulator] ***Unhandled window manipulation: operation={operation}, params=[{paramStr}]");
-                System.Console.WriteLine($"[Vt100Emulator] ***Unhandled window manipulation: operation={operation}, params=[{paramStr}]");
+                // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled window manipulation: operation={operation}, params=[{paramStr}]");
                 break;
         }
     }
@@ -615,7 +924,7 @@ public class Vt100Emulator
             _scrollRegionTop = -1;
             _scrollRegionBottom = -1;
             Debug.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen");
-            System.Console.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen");
+            // System.Console.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen");
         }
         else if (parameters.Count >= 2)
         {
@@ -629,7 +938,7 @@ public class Vt100Emulator
                 _scrollRegionTop = top;
                 _scrollRegionBottom = bottom;
                 Debug.WriteLine($"[Vt100Emulator] Scrolling region set: lines {top + 1}-{bottom + 1} (0-based: {top}-{bottom})");
-                System.Console.WriteLine($"[Vt100Emulator] Scrolling region set: lines {top + 1}-{bottom + 1} (0-based: {top}-{bottom})");
+                // System.Console.WriteLine($"[Vt100Emulator] Scrolling region set: lines {top + 1}-{bottom + 1} (0-based: {top}-{bottom})");
             }
             else
             {
@@ -637,7 +946,7 @@ public class Vt100Emulator
                 _scrollRegionTop = -1;
                 _scrollRegionBottom = -1;
                 Debug.WriteLine($"[Vt100Emulator] Invalid scrolling region parameters (top={top}, bottom={bottom}), reset to full screen");
-                System.Console.WriteLine($"[Vt100Emulator] Invalid scrolling region parameters (top={top}, bottom={bottom}), reset to full screen");
+                // System.Console.WriteLine($"[Vt100Emulator] Invalid scrolling region parameters (top={top}, bottom={bottom}), reset to full screen");
             }
         }
         else
@@ -646,7 +955,7 @@ public class Vt100Emulator
             _scrollRegionTop = -1;
             _scrollRegionBottom = -1;
             Debug.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen (only one parameter provided)");
-            System.Console.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen (only one parameter provided)");
+            // System.Console.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen (only one parameter provided)");
         }
     }
 
@@ -660,23 +969,23 @@ public class Vt100Emulator
                 // VT52: Cursor Down - move cursor down one line, same column
                 MoveCursorDown();
                 Debug.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (VT52 Cursor Down)");
-                System.Console.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (VT52 Cursor Down)");
+                // System.Console.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (VT52 Cursor Down)");
                 break;
             case '7':
                 // Save cursor position
                 // TODO: Implement cursor position save/restore
                 Debug.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Save Cursor Position - not yet implemented)");
-                System.Console.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Save Cursor Position - not yet implemented)");
+                // System.Console.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Save Cursor Position - not yet implemented)");
                 break;
             case '8':
                 // Restore cursor position
                 // TODO: Implement cursor position save/restore
                 Debug.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Restore Cursor Position - not yet implemented)");
-                System.Console.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Restore Cursor Position - not yet implemented)");
+                // System.Console.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Restore Cursor Position - not yet implemented)");
                 break;
             default:
                 Debug.WriteLine($"[Vt100Emulator] ***Unhandled single-char command: ESC{final}");
-                System.Console.WriteLine($"[Vt100Emulator] ***Unhandled single-char command: ESC{final}");
+                // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled single-char command: ESC{final}");
                 break;
         }
     }
@@ -684,138 +993,302 @@ public class Vt100Emulator
     private void MoveCursorDown()
     {
         // Move cursor down one line, keeping the same column
-        if (_currentLineIndex < 0)
+        if (_inAlternateScreen)
         {
-            // No current line, create one
-            _currentLineIndex = 0;
-            if (_lines.Count == 0)
+            // Alternate screen: buffer is fixed size, don't add lines
+            if (_currentLineIndex < 0)
             {
-                _lines.Add(new TerminalLine());
+                _currentLineIndex = 0;
             }
+            else if (_currentLineIndex < _rows - 1)
+            {
+                _currentLineIndex++;
+            }
+            // If at bottom, stay at bottom (don't scroll)
         }
         else
         {
-            // Move to next line
-            _currentLineIndex++;
-            // Ensure the line exists
-            while (_currentLineIndex >= _lines.Count)
+            // Main screen: can add lines
+            if (_currentLineIndex < 0)
             {
-                _lines.Add(new TerminalLine());
+                _currentLineIndex = 0;
+                if (_lines.Count == 0)
+                {
+                    _lines.Add(new TerminalLine());
+                }
+            }
+            else
+            {
+                _currentLineIndex++;
+                // Ensure the line exists
+                while (_currentLineIndex >= _lines.Count)
+                {
+                    _lines.Add(new TerminalLine());
+                }
             }
         }
         // Column position remains the same
-        CursorMoved?.Invoke(this, EventArgs.Empty);
+        // Don't fire events - UI will poll cursor position when needed
     }
 
     private void OnCharacter(object? sender, char c)
     {
-        if (_batchingCharacters && c >= 32 && c < 127 && c != '\r' && c != '\n' && c != '\t' && c != '\b' && c != '\x07')
-        {
-            _characterBatch.Append(c);
-            return;
-        }
+#if DEBUG
+        var stopwatch = Stopwatch.StartNew();
+#endif
         
-        FlushCharacterBatch();
-        
-        var charDisplay = c >= 32 && c < 127 ? $"'{c}'" : $"0x{(int)c:X2}";
-        Debug.WriteLine($"[Vt100Emulator] OnCharacter: {charDisplay} (line={_currentLineIndex}, col={_writeCol})");
-        System.Console.WriteLine($"[Vt100Emulator] OnCharacter: {charDisplay} (line={_currentLineIndex}, col={_writeCol})");
+        // Process characters immediately in order - no batching, no reordering
         
         switch (c)
         {
             case '\r':
+                FlushTextBatch();
+                var crRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+                var crColBefore = _writeCol;
                 _writeCol = 0;
-                CursorMoved?.Invoke(this, EventArgs.Empty);
+#if DEBUG
+                if (DebugMode)
+                {
+                    var args = new DebugCommandEventArgs
+                    {
+                        CommandType = "Control Character",
+                        Parameters = "CR (Carriage Return)",
+                        ResultingState = $"cursor moved to col=0",
+                        RawText = "\r",
+                        CommandInterpretation = "Carriage Return: Move cursor to column 0",
+                        CursorRowBefore = crRowBefore,
+                        CursorColBefore = crColBefore,
+                        CursorRowAfter = crRowBefore,
+                        CursorColAfter = 0
+                    };
+                    DebugCommandExecuted?.Invoke(this, args);
+                }
+#endif
                 break;
             case '\n':
+                FlushTextBatch();
+                var lfRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+                var lfColBefore = _writeCol;
                 _writeCol = 0;
                 NewLine();
+                var lfRowAfter = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+#if DEBUG
+                if (DebugMode)
+                {
+                    var args = new DebugCommandEventArgs
+                    {
+                        CommandType = "Control Character",
+                        Parameters = "LF (Line Feed)",
+                        ResultingState = $"cursor moved to line={lfRowAfter}, col=0",
+                        RawText = "\n",
+                        CommandInterpretation = "Line Feed: Move cursor to next line, column 0",
+                        CursorRowBefore = lfRowBefore,
+                        CursorColBefore = lfColBefore,
+                        CursorRowAfter = lfRowAfter,
+                        CursorColAfter = 0
+                    };
+                    DebugCommandExecuted?.Invoke(this, args);
+                }
+#endif
                 break;
             case '\t':
+                FlushTextBatch();
+                var tabRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+                var tabColBefore = _writeCol;
                 InsertTab();
+                var tabColAfter = _writeCol;
+#if DEBUG
+                if (DebugMode)
+                {
+                    var args = new DebugCommandEventArgs
+                    {
+                        CommandType = "Control Character",
+                        Parameters = "TAB (Horizontal Tab)",
+                        ResultingState = $"cursor moved to col={tabColAfter}",
+                        RawText = "\t",
+                        CommandInterpretation = "Horizontal Tab: Move cursor to next tab stop",
+                        CursorRowBefore = tabRowBefore,
+                        CursorColBefore = tabColBefore,
+                        CursorRowAfter = tabRowBefore,
+                        CursorColAfter = tabColAfter
+                    };
+                    DebugCommandExecuted?.Invoke(this, args);
+                }
+#endif
                 break;
             case '\b':
+                FlushTextBatch();
+                var bsRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+                var bsColBefore = _writeCol;
                 if (_writeCol > 0)
                 {
                     _writeCol--;
-                    CursorMoved?.Invoke(this, EventArgs.Empty);
                 }
+                var bsColAfter = _writeCol;
+#if DEBUG
+                if (DebugMode)
+                {
+                    var args = new DebugCommandEventArgs
+                    {
+                        CommandType = "Control Character",
+                        Parameters = "BS (Backspace)",
+                        ResultingState = $"cursor moved to col={bsColAfter}",
+                        RawText = "\b",
+                        CommandInterpretation = "Backspace: Move cursor back one column",
+                        CursorRowBefore = bsRowBefore,
+                        CursorColBefore = bsColBefore,
+                        CursorRowAfter = bsRowBefore,
+                        CursorColAfter = bsColAfter
+                    };
+                    DebugCommandExecuted?.Invoke(this, args);
+                }
+#endif
                 break;
             case '\x07':
+                FlushTextBatch();
+                var belRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+                var belColBefore = _writeCol;
                 Bell?.Invoke(this, EventArgs.Empty);
+#if DEBUG
+                if (DebugMode)
+                {
+                    var args = new DebugCommandEventArgs
+                    {
+                        CommandType = "Control Character",
+                        Parameters = "BEL (Bell)",
+                        ResultingState = "bell sound triggered",
+                        RawText = "\x07",
+                        CommandInterpretation = "Bell: Sound terminal bell",
+                        CursorRowBefore = belRowBefore,
+                        CursorColBefore = belColBefore,
+                        CursorRowAfter = belRowBefore,
+                        CursorColAfter = belColBefore
+                    };
+                    DebugCommandExecuted?.Invoke(this, args);
+                }
+#endif
                 break;
             default:
-                if (c >= 32 && c < 127)
+                // Check if character is printable (not a control character)
+                // This includes ASCII printable characters (32-126) and all Unicode printable characters
+                if (!char.IsControl(c) || c == '\t' || c == '\n' || c == '\r')
                 {
-                    // Printable ASCII character
+                    // Printable character (including Unicode) - process immediately, no batching
+                    // Track cursor position at start of batch for logging
+                    if (_textBatch.Length == 0)
+                    {
+                        _textBatchStartRow = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+                        _textBatchStartCol = _writeCol;
+                    }
+                    _textBatch.Append(c);
                     WriteCharacter(c, suppressScreenChanged: false);
                 }
                 else
                 {
-                    // Unhandled control character
+                    // Unhandled control character - flush batch and log
+                    FlushTextBatch();
                     var charName = GetControlCharName(c);
                     var charCode = (int)c;
-                    Debug.WriteLine($"[Vt100Emulator] ***Unhandled control character: {charName} (0x{charCode:X2}, '\\u{charCode:X4}')");
-                    System.Console.WriteLine($"[Vt100Emulator] ***Unhandled control character: {charName} (0x{charCode:X2}, '\\u{charCode:X4}')");
+#if DEBUG
+                    if (DebugMode)
+                    {
+                        var args = new DebugCommandEventArgs
+                        {
+                            CommandType = "Unhandled Control Character",
+                            Parameters = $"code=0x{charCode:X2}, name={charName}",
+                            ResultingState = $"character='\\u{charCode:X4}', not processed",
+                            RawText = c.ToString(),
+                            CommandInterpretation = $"Unhandled control character: {charName} (0x{charCode:X2})",
+                            CursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0,
+                            CursorColBefore = _writeCol,
+                            CursorRowAfter = _currentLineIndex >= 0 ? _currentLineIndex : 0,
+                            CursorColAfter = _writeCol
+                        };
+                        DebugCommandExecuted?.Invoke(this, args);
+                    }
+#endif
                 }
                 break;
         }
+        
+#if DEBUG
+        stopwatch.Stop();
+        RecordPerformance("OnCharacter", stopwatch.ElapsedTicks);
+#endif
     }
     
-    public void BeginCharacterBatch()
+    private void FlushTextBatch()
     {
-        _batchingCharacters = true;
-        _characterBatch.Clear();
-    }
-    
-    public void EndCharacterBatch()
-    {
-        FlushCharacterBatch();
-        _batchingCharacters = false;
-    }
-    
-    private void FlushCharacterBatch()
-    {
-        if (_characterBatch.Length > 0)
+#if DEBUG
+        var stopwatch = Stopwatch.StartNew();
+#endif
+#if DEBUG
+        if (DebugMode && _textBatch.Length > 0)
         {
-            var text = _characterBatch.ToString();
-            Debug.WriteLine($"[Vt100Emulator] FlushCharacterBatch: \"{AnsiParser.EscapeString(text)}\" ({text.Length} chars)");
-            System.Console.WriteLine($"[Vt100Emulator] FlushCharacterBatch: \"{AnsiParser.EscapeString(text)}\" ({text.Length} chars)");
-            _characterBatch.Clear();
+            var text = _textBatch.ToString();
+            var textLength = text.Length;
             
-            foreach (var c in text)
+            // Use the tracked start position, not a calculated one
+            var cursorRowBefore = _textBatchStartRow >= 0 ? _textBatchStartRow : (_currentLineIndex >= 0 ? _currentLineIndex : 0);
+            var cursorColBefore = _textBatchStartCol >= 0 ? _textBatchStartCol : 0;
+            
+            var cursorRowAfter = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+            var cursorColAfter = _writeCol;
+            
+            var args = new DebugCommandEventArgs
             {
-                WriteCharacter(c, suppressScreenChanged: true);
-            }
-            
-            CursorMoved?.Invoke(this, EventArgs.Empty);
-            ScreenChanged?.Invoke(this, EventArgs.Empty);
+                CommandType = "Text",
+                Parameters = $"length={textLength}",
+                ResultingState = $"text=\"{AnsiParser.EscapeString(text)}\"",
+                RawText = text,
+                CommandInterpretation = $"Text Output: {textLength} character(s)",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = cursorRowAfter,
+                CursorColAfter = cursorColAfter
+            };
+            DebugCommandExecuted?.Invoke(this, args);
         }
+#endif
+        _textBatch.Clear();
+        _textBatchStartRow = -1;
+        _textBatchStartCol = -1;
+#if DEBUG
+        stopwatch.Stop();
+        RecordPerformance("FlushTextBatch", stopwatch.ElapsedTicks);
+#endif
     }
 
     private void WriteCharacter(char c, bool suppressScreenChanged = false)
     {
-        // If we've reached terminal width, handle according to auto-wrap mode
-        if (_writeCol >= _cols && _cols > 0)
+#if DEBUG
+        var stopwatch = Stopwatch.StartNew();
+#endif
+        
+        if (_inAlternateScreen)
         {
-            if (_autoWrapMode)
+            // Alternate screen: buffer is fixed size (_rows lines)
+            if (_currentLineIndex < 0)
             {
-                // Auto-wrap enabled: start a new line
-                NewLine();
+                _currentLineIndex = 0;
             }
-            else
+            else if (_currentLineIndex >= _rows)
             {
-                // Auto-wrap disabled: stay at right margin, overwrite last character
-                // Don't create a new line, just write at the last column
-                _writeCol = _cols - 1;
+                return;
             }
         }
-
-        // Ensure we have a current line
-        if (_currentLineIndex < 0)
+        else
         {
-            _currentLineIndex = _lines.Count;
-            _lines.Add(new TerminalLine());
+            if (_writeCol >= _cols && _cols > 0)
+            {
+                NewLine();
+            }
+
+            if (_currentLineIndex < 0)
+            {
+                _currentLineIndex = _lines.Count;
+                _lines.Add(new TerminalLine());
+            }
         }
 
         var line = _lines[_currentLineIndex];
@@ -847,6 +1320,7 @@ public class Vt100Emulator
                 Overline = _overline
             };
             line.Cells.Insert(_writeCol, newCell);
+            MarkLineDirty(line);
         }
         else
         {
@@ -871,97 +1345,62 @@ public class Vt100Emulator
             cell.Conceal = _conceal;
             cell.CrossedOut = _crossedOut;
             cell.Overline = _overline;
+            MarkLineDirty(line);
         }
-
         _writeCol++;
         
-        if (!suppressScreenChanged)
-        {
-            CursorMoved?.Invoke(this, EventArgs.Empty);
-            ScreenChanged?.Invoke(this, EventArgs.Empty);
-        }
+#if DEBUG
+        stopwatch.Stop();
+        RecordPerformance("WriteCharacter", stopwatch.ElapsedTicks);
+#endif
     }
 
     private void NewLine()
     {
-        // Check if we're within a scrolling region
-        bool inScrollRegion = _scrollRegionTop >= 0 && _scrollRegionBottom >= _scrollRegionTop;
-        
-        if (inScrollRegion)
+        if (_inAlternateScreen)
         {
-            // Calculate the screen-relative position (last _rows lines are the "screen")
-            int screenStartIndex = Math.Max(0, _lines.Count - _rows);
-            int screenRelativeCursorRow = _currentLineIndex - screenStartIndex;
-            
-            // Check if cursor is at or beyond the bottom of the scrolling region (in screen coordinates)
-            if (screenRelativeCursorRow >= _scrollRegionBottom)
+            if (_currentLineIndex < 0)
             {
-                // We're at or past the bottom of the scrolling region
-                // Scroll the region up by removing the top line of the region (in screen coordinates)
-                int absoluteTopLineIndex = screenStartIndex + _scrollRegionTop;
-                
-                if (absoluteTopLineIndex < _lines.Count && absoluteTopLineIndex >= 0)
+                _currentLineIndex = 0;
+            }
+            else if (_currentLineIndex >= _rows - 1)
+            {
+                for (int i = 0; i < _rows - 1; i++)
                 {
-                    _lines.RemoveAt(absoluteTopLineIndex);
-                    // Adjust current line index since we removed a line
-                    if (_currentLineIndex > absoluteTopLineIndex)
-                    {
-                        _currentLineIndex--;
-                    }
-                    else if (_currentLineIndex == absoluteTopLineIndex)
-                    {
-                        // Cursor was at the top of the region, stay at the same screen-relative position
-                        _currentLineIndex = absoluteTopLineIndex;
-                    }
+                    CopyLineCells(_lines[i + 1], _lines[i]);
+                    MarkLineDirty(i);
+                    MarkLineDirty(i + 1);
                 }
-                
-                // Create new line at the bottom of the scrolling region (in screen coordinates)
-                int newScreenStartIndex = Math.Max(0, _lines.Count - _rows);
-                int absoluteBottomLineIndex = newScreenStartIndex + _scrollRegionBottom;
-                _currentLineIndex = absoluteBottomLineIndex;
-                
-                if (_currentLineIndex >= _lines.Count)
-                {
-                    _lines.Add(new TerminalLine());
-                }
-                else if (_currentLineIndex >= 0)
-                {
-                    // Replace the line at the bottom of the scrolling region
-                    _lines[_currentLineIndex] = new TerminalLine();
-                }
-                else
-                {
-                    // Fallback: just add a new line
-                    _currentLineIndex = _lines.Count;
-                    _lines.Add(new TerminalLine());
-                }
+                _lines[_rows - 1].Cells.Clear();
+                MarkLineDirty(_rows - 1);
+                _currentLineIndex = _rows - 1;
             }
             else
             {
-                // We're within the scrolling region but not at the bottom
-                // Just move to the next line
+                // Move to next line
                 _currentLineIndex++;
-                if (_currentLineIndex >= _lines.Count)
-                {
-                    _lines.Add(new TerminalLine());
-                }
-                else
-                {
-                    // Clear the line we're moving to
-                    _lines[_currentLineIndex] = new TerminalLine();
-                }
             }
         }
         else
         {
-            // No scrolling region - normal behavior: just add a new line
-            _currentLineIndex = _lines.Count;
-            _lines.Add(new TerminalLine());
+            if (_currentLineIndex < 0)
+            {
+                _currentLineIndex = _lines.Count;
+            }
+            else
+            {
+                _currentLineIndex++;
+            }
+            
+            // Ensure the line exists
+            while (_currentLineIndex >= _lines.Count)
+            {
+                _lines.Add(new TerminalLine());
+            }
         }
         
         _writeCol = 0;
-        CursorMoved?.Invoke(this, EventArgs.Empty);
-        ScreenChanged?.Invoke(this, EventArgs.Empty);
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
 
     private void InsertTab()
@@ -970,16 +1409,917 @@ public class Vt100Emulator
         var nextTab = ((_writeCol / tabStop) + 1) * tabStop;
         // Don't limit by terminal width - lines can be any length
         _writeCol = nextTab;
-        CursorMoved?.Invoke(this, EventArgs.Empty);
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessCursorPosition(List<int> parameters, AnsiCommand command)
+    {
+        // CUP (Cursor Position) - ESC [ row ; col H or ESC [ row ; col f
+        // Parameters are 1-based (1 = first row/column)
+        // Default is 1 if not specified
+        int targetRow = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        int targetCol = parameters.Count > 1 && parameters[1] > 0 ? parameters[1] : 1;
+        
+        // Convert from 1-based to 0-based
+        int rowIndex = targetRow - 1;
+        int colIndex = targetCol - 1;
+        
+        // Clamp to valid range
+        if (rowIndex < 0) rowIndex = 0;
+        if (rowIndex >= _rows) rowIndex = _rows - 1;
+        if (colIndex < 0) colIndex = 0;
+        if (colIndex >= _cols) colIndex = _cols - 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        if (_inAlternateScreen)
+        {
+            // Alternate screen: buffer is fixed size, don't add lines
+            _currentLineIndex = rowIndex;
+            _writeCol = colIndex;
+        }
+        else
+        {
+            // Main screen: ensure line exists
+            while (rowIndex >= _lines.Count)
+            {
+                _lines.Add(new TerminalLine());
+            }
+            _currentLineIndex = rowIndex;
+            _writeCol = colIndex;
+        }
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "CUP",
+                Parameters = $"row={targetRow}, col={targetCol}",
+                ResultingState = $"cursor moved to line={_currentLineIndex}, col={_writeCol}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Cursor Position: row {targetRow} (0-based: {rowIndex}), col {targetCol} (0-based: {colIndex})",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = _currentLineIndex,
+                CursorColAfter = _writeCol
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessVerticalPositionAbsolute(List<int> parameters, AnsiCommand command)
+    {
+        // VPA (Vertical Position Absolute) - ESC [ row d
+        // Parameter is 1-based (1 = first row)
+        // Default is 1 if not specified
+        int targetRow = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+        // Convert from 1-based to 0-based
+        int rowIndex = targetRow - 1;
+        
+        // Clamp to valid range
+        if (rowIndex < 0) rowIndex = 0;
+        if (rowIndex >= _rows) rowIndex = _rows - 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        if (_inAlternateScreen)
+        {
+            // Alternate screen: buffer is fixed size, don't add lines
+            _currentLineIndex = rowIndex;
+        }
+        else
+        {
+            // Main screen: ensure line exists
+            while (rowIndex >= _lines.Count)
+            {
+                _lines.Add(new TerminalLine());
+            }
+            _currentLineIndex = rowIndex;
+        }
+         
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "VPA",
+                Parameters = $"row={targetRow}",
+                ResultingState = $"cursor moved to line={_currentLineIndex}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Vertical Position Absolute: row {targetRow} (0-based: {rowIndex})",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = _currentLineIndex,
+                CursorColAfter = _writeCol
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessCursorHorizontalAbsolute(List<int> parameters, AnsiCommand command)
+    {
+        // CHA (Cursor Horizontal Absolute) - ESC [ col G
+        // Parameter is 1-based (1 = first column)
+        // Default is 1 if not specified
+        int targetCol = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+        // Convert from 1-based to 0-based
+        int colIndex = targetCol - 1;
+        
+        // Clamp to valid range
+        if (colIndex < 0) colIndex = 0;
+        if (colIndex >= _cols) colIndex = _cols - 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        _writeCol = colIndex;
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "CHA",
+                Parameters = $"col={targetCol}",
+                ResultingState = $"cursor moved to col={_writeCol}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Cursor Horizontal Absolute: col {targetCol} (0-based: {colIndex})",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = cursorRowBefore,
+                CursorColAfter = _writeCol
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessCursorUp(List<int> parameters, AnsiCommand command)
+    {
+        // CUU (Cursor Up) - ESC [ n A
+        // Moves cursor up n lines (default 1)
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        if (_currentLineIndex >= 0)
+        {
+            _currentLineIndex = Math.Max(0, _currentLineIndex - count);
+        }
+        else
+        {
+            _currentLineIndex = 0;
+        }
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "CUU",
+                Parameters = $"count={count}",
+                ResultingState = $"cursor moved to line={_currentLineIndex}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Cursor Up: {count} line(s)",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = _currentLineIndex,
+                CursorColAfter = cursorColBefore
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessCursorDown(List<int> parameters, AnsiCommand command)
+    {
+        // CUD (Cursor Down) - ESC [ n B
+        // Moves cursor down n lines (default 1)
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        if (_inAlternateScreen)
+        {
+            // Alternate screen: clamp to valid range
+            if (_currentLineIndex < 0)
+            {
+                _currentLineIndex = 0;
+            }
+            else
+            {
+                _currentLineIndex = Math.Min(_rows - 1, _currentLineIndex + count);
+            }
+        }
+        else
+        {
+            // Main screen: can add lines
+            if (_currentLineIndex < 0)
+            {
+                _currentLineIndex = 0;
+            }
+            else
+            {
+                _currentLineIndex += count;
+            }
+            while (_currentLineIndex >= _lines.Count)
+            {
+                _lines.Add(new TerminalLine());
+            }
+        }
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "CUD",
+                Parameters = $"count={count}",
+                ResultingState = $"cursor moved to line={_currentLineIndex}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Cursor Down: {count} line(s)",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = _currentLineIndex,
+                CursorColAfter = cursorColBefore
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessCursorForward(List<int> parameters, AnsiCommand command)
+    {
+        // CUF (Cursor Forward) - ESC [ n C
+        // Moves cursor right n columns (default 1)
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        _writeCol += count;
+        if (_writeCol >= _cols && _cols > 0)
+        {
+            _writeCol = _cols - 1;
+        }
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "CUF",
+                Parameters = $"count={count}",
+                ResultingState = $"cursor moved to col={_writeCol}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Cursor Forward: {count} column(s)",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = cursorRowBefore,
+                CursorColAfter = _writeCol
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessCursorBackward(List<int> parameters, AnsiCommand command)
+    {
+        // CUB (Cursor Backward) - ESC [ n D
+        // Moves cursor left n columns (default 1)
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        _writeCol = Math.Max(0, _writeCol - count);
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "CUB",
+                Parameters = $"count={count}",
+                ResultingState = $"cursor moved to col={_writeCol}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Cursor Backward: {count} column(s)",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = cursorRowBefore,
+                CursorColAfter = _writeCol
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessCursorNextLine(List<int> parameters, AnsiCommand command)
+    {
+        // CNL (Cursor Next Line) - ESC [ n E
+        // Moves cursor to beginning of line n lines down (default 1)
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        if (_inAlternateScreen)
+        {
+            // Alternate screen: clamp to valid range
+            if (_currentLineIndex < 0)
+            {
+                _currentLineIndex = 0;
+            }
+            else
+            {
+                _currentLineIndex = Math.Min(_rows - 1, _currentLineIndex + count);
+            }
+        }
+        else
+        {
+            // Main screen: can add lines
+            if (_currentLineIndex < 0)
+            {
+                _currentLineIndex = 0;
+            }
+            else
+            {
+                _currentLineIndex += count;
+            }
+            while (_currentLineIndex >= _lines.Count)
+            {
+                _lines.Add(new TerminalLine());
+            }
+        }
+        
+        _writeCol = 0;
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "CNL",
+                Parameters = $"count={count}",
+                ResultingState = $"cursor moved to line={_currentLineIndex}, col=0",
+                RawText = command.RawText,
+                CommandInterpretation = $"Cursor Next Line: {count} line(s), col=0",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = _currentLineIndex,
+                CursorColAfter = 0
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessScrollUp(List<int> parameters, AnsiCommand command)
+    {
+        // SU (Scroll Up) - ESC [ n S
+        // Scrolls the screen up by n lines (default 1)
+        // Content moves up: lines from (scrollTop + count) to scrollBottom are copied to scrollTop to (scrollBottom - count)
+        // Lines at (scrollBottom - count + 1) to scrollBottom are cleared
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        if (_inAlternateScreen)
+        {
+            // Determine scroll region bounds
+            int scrollTop = _scrollRegionTop >= 0 ? _scrollRegionTop : 0;
+            int scrollBottom = _scrollRegionBottom >= 0 ? _scrollRegionBottom : (_rows - 1);
+            
+            // Clamp count to scroll region size
+            int regionSize = scrollBottom - scrollTop + 1;
+            count = Math.Min(count, regionSize);
+            
+            for (int i = scrollBottom - count; i >= scrollTop; i--)
+            {
+                CopyLineCells(_lines[i + count], _lines[i]);
+                MarkLineDirty(i);
+                MarkLineDirty(i + count);
+            }
+            
+            for (int i = scrollBottom - count + 1; i <= scrollBottom; i++)
+            {
+                _lines[i].Cells.Clear();
+                MarkLineDirty(i);
+            }
+        }
+        else
+        {
+            // Main screen: scroll up by removing lines from top
+            for (int i = 0; i < count && _lines.Count > 0; i++)
+            {
+                _lines.RemoveAt(0);
+                if (_currentLineIndex > 0)
+                {
+                    _currentLineIndex--;
+                }
+            }
+        }
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "SU",
+                Parameters = $"count={count}",
+                ResultingState = $"scrolled up {count} line(s), cursor unchanged at line={_currentLineIndex}, col={_writeCol}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Scroll Up: {count} line(s)",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = _currentLineIndex,
+                CursorColAfter = _writeCol
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessScrollDown(List<int> parameters, AnsiCommand command)
+    {
+        // SD (Scroll Down) - ESC [ n T
+        // Scrolls the screen down by n lines (default 1)
+        // Content moves down: lines from scrollTop to (scrollBottom - count) are copied to (scrollTop + count) to scrollBottom
+        // Lines at scrollTop to (scrollTop + count - 1) are cleared
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        if (_inAlternateScreen)
+        {
+            // Determine scroll region bounds
+            int scrollTop = _scrollRegionTop >= 0 ? _scrollRegionTop : 0;
+            int scrollBottom = _scrollRegionBottom >= 0 ? _scrollRegionBottom : (_rows - 1);
+            
+            // Clamp count to scroll region size
+            int regionSize = scrollBottom - scrollTop + 1;
+            count = Math.Min(count, regionSize);
+            
+            for (int i = scrollTop; i <= scrollBottom - count; i++)
+            {
+                CopyLineCells(_lines[i], _lines[i + count]);
+                MarkLineDirty(i);
+                MarkLineDirty(i + count);
+            }
+            
+            for (int i = scrollTop; i < scrollTop + count; i++)
+            {
+                _lines[i].Cells.Clear();
+                MarkLineDirty(i);
+            }
+            
+            // Cursor stays at same screen position, so if it's in the scroll region, it moves down with content
+            if (_currentLineIndex >= scrollTop && _currentLineIndex <= scrollBottom)
+            {
+                _currentLineIndex = Math.Min(_currentLineIndex + count, scrollBottom);
+            }
+        }
+        else
+        {
+            // Main screen: scroll down by inserting blank lines at top
+            for (int i = 0; i < count; i++)
+            {
+                _lines.Insert(0, new TerminalLine());
+                if (_currentLineIndex >= 0)
+                {
+                    _currentLineIndex++;
+                }
+            }
+        }
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "SD",
+                Parameters = $"count={count}",
+                ResultingState = $"scrolled down {count} line(s), cursor at line={_currentLineIndex}, col={_writeCol}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Scroll Down: {count} line(s)",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = _currentLineIndex,
+                CursorColAfter = _writeCol
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessDeleteLine(List<int> parameters, AnsiCommand command)
+    {
+        // DL (Delete Line) - ESC [ Ps M
+        // Deletes Ps lines at the cursor position (default 1)
+        // Lines below move up, blank lines inserted at bottom of scroll region
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        if (_inAlternateScreen)
+        {
+            // Determine scroll region bounds
+            int scrollTop = _scrollRegionTop >= 0 ? _scrollRegionTop : 0;
+            int scrollBottom = _scrollRegionBottom >= 0 ? _scrollRegionBottom : (_rows - 1);
+            
+            // Get cursor position
+            int cursorRow = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+            
+            // Clamp cursor row to scroll region
+            if (cursorRow < scrollTop) cursorRow = scrollTop;
+            if (cursorRow > scrollBottom) cursorRow = scrollBottom;
+            
+            // Calculate how many lines to delete (can't delete beyond scroll region)
+            int maxDelete = scrollBottom - cursorRow + 1;
+            count = Math.Min(count, maxDelete);
+            
+            for (int i = scrollBottom - count; i >= cursorRow; i--)
+            {
+                CopyLineCells(_lines[i + count], _lines[i]);
+            }
+            
+            // Clear the lines at the bottom of scroll region that were copied from
+            for (int i = scrollBottom - count + 1; i <= scrollBottom; i++)
+            {
+                if (i >= scrollTop && i <= scrollBottom && i >= 0 && i < _lines.Count)
+                {
+                    _lines[i].Cells.Clear();
+                    MarkLineDirty(i);
+                }
+            }
+        }
+        else
+        {
+            // Main screen: delete lines by removing them
+            int cursorRow = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+            for (int i = 0; i < count && cursorRow < _lines.Count; i++)
+            {
+                if (cursorRow < _lines.Count)
+                {
+                    _lines.RemoveAt(cursorRow);
+                }
+            }
+        }
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "DL",
+                Parameters = $"count={count}",
+                ResultingState = $"deleted {count} line(s) at cursor, cursor at line={_currentLineIndex}, col={_writeCol}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Delete Line: {count} line(s)",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = _currentLineIndex,
+                CursorColAfter = _writeCol
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessInsertLine(List<int> parameters, AnsiCommand command)
+    {
+        // IL (Insert Line) - ESC [ Ps L
+        // Inserts Ps blank lines at the cursor position (default 1)
+        // Lines below move down, lines at bottom of scroll region are removed
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        if (_inAlternateScreen)
+        {
+            // Determine scroll region bounds
+            int scrollTop = _scrollRegionTop >= 0 ? _scrollRegionTop : 0;
+            int scrollBottom = _scrollRegionBottom >= 0 ? _scrollRegionBottom : (_rows - 1);
+            
+            // Get cursor position
+            int cursorRow = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+            
+            // Clamp cursor row to scroll region
+            if (cursorRow < scrollTop) cursorRow = scrollTop;
+            if (cursorRow > scrollBottom) cursorRow = scrollBottom;
+            
+            // Calculate how many lines to insert (can't insert beyond scroll region)
+            int maxInsert = scrollBottom - cursorRow + 1;
+            count = Math.Min(count, maxInsert);
+            
+            for (int i = scrollBottom - count; i >= cursorRow; i--)
+            {
+                CopyLineCells(_lines[i], _lines[i + count]);
+                MarkLineDirty(i);
+                MarkLineDirty(i + count);
+            }
+            
+            for (int i = cursorRow; i < cursorRow + count; i++)
+            {
+                _lines[i].Cells.Clear();
+                MarkLineDirty(i);
+            }
+        }
+        else
+        {
+            // Main screen: insert blank lines
+            int cursorRow = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+            for (int i = 0; i < count; i++)
+            {
+                _lines.Insert(cursorRow, new TerminalLine());
+            }
+        }
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "IL",
+                Parameters = $"count={count}",
+                ResultingState = $"inserted {count} blank line(s) at cursor, cursor at line={_currentLineIndex}, col={_writeCol}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Insert Line: {count} line(s)",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = _currentLineIndex,
+                CursorColAfter = _writeCol
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessDeleteCharacter(List<int> parameters, AnsiCommand command)
+    {
+        // DCH (Delete Character) - ESC [ Ps P
+        // Deletes Ps characters at the cursor position (default 1)
+        // Characters to the right shift left
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        if (_currentLineIndex >= 0 && _currentLineIndex < _lines.Count)
+        {
+            var line = _lines[_currentLineIndex];
+            
+            // Delete characters by shifting left
+            if (_writeCol < line.Cells.Count)
+            {
+                int deleteCount = Math.Min(count, line.Cells.Count - _writeCol);
+                line.Cells.RemoveRange(_writeCol, deleteCount);
+            }
+        }
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "DCH",
+                Parameters = $"count={count}",
+                ResultingState = $"deleted {count} character(s) at cursor, cursor at line={_currentLineIndex}, col={_writeCol}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Delete Character: {count} character(s)",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = _currentLineIndex,
+                CursorColAfter = _writeCol
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessInsertCharacter(List<int> parameters, AnsiCommand command)
+    {
+        // ICH (Insert Character) - ESC [ Ps @
+        // Inserts Ps blank characters at the cursor position (default 1)
+        // Existing characters shift right
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        if (_currentLineIndex >= 0 && _currentLineIndex < _lines.Count)
+        {
+            var line = _lines[_currentLineIndex];
+            
+            // Ensure line has enough cells up to cursor position
+            while (line.Cells.Count < _writeCol)
+            {
+                line.Cells.Add(new TerminalCell { Character = ' ' });
+            }
+            
+            // Insert blank characters
+            var blankCell = new TerminalCell
+            {
+                Character = ' ',
+                ForegroundColor = _foregroundColor,
+                BackgroundColor = _backgroundColor,
+                Bold = _bold,
+                Faint = _faint,
+                Italic = _italic,
+                Underline = _underline,
+                Blink = _blink,
+                Reverse = _reverse,
+                Conceal = _conceal,
+                CrossedOut = _crossedOut,
+                DoubleUnderline = _doubleUnderline,
+                Overline = _overline
+            };
+            
+            for (int i = 0; i < count; i++)
+            {
+                line.Cells.Insert(_writeCol, new TerminalCell
+                {
+                    Character = blankCell.Character,
+                    ForegroundColor = blankCell.ForegroundColor,
+                    BackgroundColor = blankCell.BackgroundColor,
+                    Bold = blankCell.Bold,
+                    Faint = blankCell.Faint,
+                    Italic = blankCell.Italic,
+                    Underline = blankCell.Underline,
+                    Blink = blankCell.Blink,
+                    Reverse = blankCell.Reverse,
+                    Conceal = blankCell.Conceal,
+                    CrossedOut = blankCell.CrossedOut,
+                    DoubleUnderline = blankCell.DoubleUnderline,
+                    Overline = blankCell.Overline
+                });
+            }
+        }
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "ICH",
+                Parameters = $"count={count}",
+                ResultingState = $"inserted {count} blank character(s) at cursor, cursor at line={_currentLineIndex}, col={_writeCol}",
+                RawText = command.RawText,
+                CommandInterpretation = $"Insert Character: {count} character(s)",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = _currentLineIndex,
+                CursorColAfter = _writeCol
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
+    }
+
+    private void ProcessCursorPreviousLine(List<int> parameters, AnsiCommand command)
+    {
+        // CPL (Cursor Previous Line) - ESC [ n F
+        // Moves cursor to beginning of line n lines up (default 1)
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
+        if (_currentLineIndex >= 0)
+        {
+            _currentLineIndex = Math.Max(0, _currentLineIndex - count);
+        }
+        else
+        {
+            _currentLineIndex = 0;
+        }
+        
+        _writeCol = 0;
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "CPL",
+                Parameters = $"count={count}",
+                ResultingState = $"cursor moved to line={_currentLineIndex}, col=0",
+                RawText = command.RawText,
+                CommandInterpretation = $"Cursor Previous Line: {count} line(s), col=0",
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = _currentLineIndex,
+                CursorColAfter = 0
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
+        
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
 
     // Process SGR (Select Graphic Rendition) command - ANSI escape sequence for text styles and colors
     // Format: ESC[<parameters>m where parameters are semicolon-separated numbers
-    private void ProcessSgr(List<int> parameters)
+    private void ProcessSgr(List<int> parameters, AnsiCommand? command = null)
     {
+#if DEBUG
+        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
+        var cursorColBefore = _writeCol;
+#endif
+        
         if (parameters.Count == 0)
         {
             ResetAttributes();
+#if DEBUG
+            if (DebugMode)
+            {
+                var rawText = command?.RawText ?? "\x1B[m";
+                var args = new DebugCommandEventArgs
+                {
+                    CommandType = "SGR",
+                    Parameters = "0 (reset all)",
+                    ResultingState = "all attributes reset to defaults",
+                    RawText = rawText,
+                    CommandInterpretation = "SGR (Select Graphic Rendition): Reset all attributes",
+                    CursorRowBefore = cursorRowBefore,
+                    CursorColBefore = cursorColBefore,
+                    CursorRowAfter = cursorRowBefore,
+                    CursorColAfter = cursorColBefore
+                };
+                DebugCommandExecuted?.Invoke(this, args);
+            }
+#endif
             return;
         }
 
@@ -1115,10 +2455,11 @@ public class Vt100Emulator
                     else if (colorType == 2 && i + 4 < parameters.Count)
                     {
                         // True color RGB: 38;2;<r>;<g>;<b>
-                        var r = parameters[i + 2];
-                        var g = parameters[i + 3];
-                        var b = parameters[i + 4];
-                        _foregroundColor = ConvertRgbTo256Color(r, g, b);
+                        // Store as packed RGB: 0x1000000 | (r << 16) | (g << 8) | b
+                        var r = Math.Max(0, Math.Min(255, parameters[i + 2]));
+                        var g = Math.Max(0, Math.Min(255, parameters[i + 3]));
+                        var b = Math.Max(0, Math.Min(255, parameters[i + 4]));
+                        _foregroundColor = 0x1000000 | (r << 16) | (g << 8) | b;
                         consumed = 5;
                     }
                 }
@@ -1150,10 +2491,11 @@ public class Vt100Emulator
                     else if (colorType == 2 && i + 4 < parameters.Count)
                     {
                         // True color RGB: 48;2;<r>;<g>;<b>
-                        var r = parameters[i + 2];
-                        var g = parameters[i + 3];
-                        var b = parameters[i + 4];
-                        _backgroundColor = ConvertRgbTo256Color(r, g, b);
+                        // Store as packed RGB: 0x1000000 | (r << 16) | (g << 8) | b
+                        var r = Math.Max(0, Math.Min(255, parameters[i + 2]));
+                        var g = Math.Max(0, Math.Min(255, parameters[i + 3]));
+                        var b = Math.Max(0, Math.Min(255, parameters[i + 4]));
+                        _backgroundColor = 0x1000000 | (r << 16) | (g << 8) | b;
                         consumed = 5;
                     }
                 }
@@ -1192,6 +2534,29 @@ public class Vt100Emulator
             
             i += consumed;
         }
+        
+#if DEBUG
+        if (DebugMode)
+        {
+            var rawText = command?.RawText ?? $"\x1B[{string.Join(";", parameters)}m";
+            var paramStr = string.Join(";", parameters);
+            var interpretation = $"SGR (Select Graphic Rendition): Set text attributes";
+            var resultingState = $"fg={_foregroundColor}, bg={_backgroundColor}, bold={_bold}, underline={_underline}, italic={_italic}, reverse={_reverse}";
+            var args = new DebugCommandEventArgs
+            {
+                CommandType = "SGR",
+                Parameters = paramStr,
+                ResultingState = resultingState,
+                RawText = rawText,
+                CommandInterpretation = interpretation,
+                CursorRowBefore = cursorRowBefore,
+                CursorColBefore = cursorColBefore,
+                CursorRowAfter = cursorRowBefore,
+                CursorColAfter = cursorColBefore
+            };
+            DebugCommandExecuted?.Invoke(this, args);
+        }
+#endif
     }
 
     private static int ConvertRgbTo256Color(int r, int g, int b)
@@ -1271,27 +2636,35 @@ public class Vt100Emulator
 
     private void SwitchToAlternateScreen()
     {
-        // Clear the current screen (alternate buffer starts empty)
+        _inAlternateScreen = true;
         _lines.Clear();
         _currentLineIndex = -1;
         _writeCol = 0;
         
+        // Pre-allocate _rows empty lines so the buffer is always the correct size
+        // This ensures rendering always shows _rows lines from the top
+        for (int i = 0; i < _rows; i++)
+        {
+            _lines.Add(new TerminalLine());
+        }
+        
         // Reset attributes to defaults
         ResetAttributes();
         
-        ScreenChanged?.Invoke(this, EventArgs.Empty);
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
 
     private void RestoreMainScreenState()
     {
+        _inAlternateScreen = false;
+        
         if (_savedMainScreenLines == null)
         {
-            // Nothing was saved, just clear the screen
             _lines.Clear();
             _currentLineIndex = -1;
             _writeCol = 0;
             ResetAttributes();
-            ScreenChanged?.Invoke(this, EventArgs.Empty);
+            // Don't fire events - ScreenChanged will be fired at end of ProcessData
             return;
         }
         
@@ -1342,8 +2715,7 @@ public class Vt100Emulator
         // Clear saved state
         _savedMainScreenLines = null;
         
-        CursorMoved?.Invoke(this, EventArgs.Empty);
-        ScreenChanged?.Invoke(this, EventArgs.Empty);
+        // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
 
     private static string GetControlCharName(char c)

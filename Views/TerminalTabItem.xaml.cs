@@ -20,6 +20,7 @@ public partial class TerminalTabItem : TabItem
     public string ConnectionName { get; private set; } = "New Tab";
     public string? ConnectionColor { get; private set; }
     public SshSessionConfiguration? SessionConfig { get; private set; }
+    public TerminalEmulator Terminal => TerminalControl;
 
     private bool _isDragging = false;
     private Point _dragStartPoint;
@@ -178,7 +179,7 @@ public partial class TerminalTabItem : TabItem
             
             if (Connection != null && Connection.IsConnected)
             {
-                TerminalControl.SendTerminalSizeToServer();
+                TerminalControl.SendTerminalSizeToServer(force: true);
             }
         }));
     }

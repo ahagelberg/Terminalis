@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -11,18 +14,53 @@ using System.Windows.Threading;
 using TabbySSH.Services.Connections;
 using TabbySSH.Utils;
 
-namespace TabbySSH.Views;
+namespace TabbySSH.Views
+{
+    // Helper class to host DrawingVisual in Canvas
+    public class VisualHost : FrameworkElement
+    {
+        private Visual? _visual;
 
-public partial class TerminalEmulator : UserControl
+        public VisualHost(Visual visual)
+        {
+            _visual = visual;
+            AddVisualChild(_visual);
+        }
+
+        protected override int VisualChildrenCount => _visual != null ? 1 : 0;
+
+        protected override Visual GetVisualChild(int index)
+        {
+            if (_visual == null || index != 0)
+                throw new ArgumentOutOfRangeException();
+            return _visual;
+        }
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            // Cannot return PositiveInfinity - return a large but finite size if needed
+            var width = double.IsPositiveInfinity(availableSize.Width) ? 10000 : availableSize.Width;
+            var height = double.IsPositiveInfinity(availableSize.Height) ? 10000 : availableSize.Height;
+            return new Size(width, height);
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            return finalSize;
+        }
+    }
+
+    public partial class TerminalEmulator : UserControl
 {
     private const int DEFAULT_FONT_SIZE = 12;
     private const int DEFAULT_SCROLLBACK_LINES = 20000;
     private const int SCROLL_LINES_PER_TICK = 3;
     private const int ECHO_DETECTION_WINDOW_MS = 100; // Time window to detect echoed user input
 
-    private Vt100Emulator? _emulator;
+    public Vt100Emulator? _emulator;
     private ITerminalConnection? _connection;
     private Typeface? _typeface;
+    private GlyphTypeface? _glyphTypeface;
     private double _charWidth;
     private double _charHeight;
     private double _fontSize = DEFAULT_FONT_SIZE;
@@ -59,7 +97,9 @@ public partial class TerminalEmulator : UserControl
         IsVisibleChanged += TerminalEmulator_IsVisibleChanged;
         ContextMenu = null;
         Focusable = true;
+        
     }
+    
 
     public void AttachConnection(ITerminalConnection connection, string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool resetScrollOnUserInput = true, bool resetScrollOnServerOutput = false, string? backspaceKey = null, bool allowTitleChange = false)
     {
@@ -82,17 +122,21 @@ public partial class TerminalEmulator : UserControl
         if (_emulator != null)
         {
             _emulator.Bell -= OnBell;
-            _emulator.ScreenChanged -= OnScreenChanged;
-            _emulator.CursorMoved -= OnCursorMoved;
             _emulator.TitleChanged -= OnTitleChanged;
         }
 
         _emulator = new Vt100Emulator();
         _emulator.SetScrollbackLimit(DEFAULT_SCROLLBACK_LINES);
-        _emulator.ScreenChanged += OnScreenChanged;
-        _emulator.CursorMoved += OnCursorMoved;
         _emulator.Bell += OnBell;
         _emulator.TitleChanged += OnTitleChanged;
+        
+#if DEBUG
+        _emulator.DebugCommandExecuted += OnDebugCommandExecuted;
+        if (_debugMode)
+        {
+            _emulator.DebugMode = true;
+        }
+#endif
 
         InitializeFont(fontFamily ?? "Consolas", fontSize ?? DEFAULT_FONT_SIZE);
 
@@ -109,15 +153,16 @@ public partial class TerminalEmulator : UserControl
         UpdateTerminalSize();
         RenderScreen();
         
+        // Send initial size when connection is attached
         if (_connection != null && _connection.IsConnected)
         {
-            SendTerminalSizeToServer();
+            SendTerminalSizeToServer(force: true);
         }
         
         Dispatcher.BeginInvoke(new Action(() => Focus()), System.Windows.Threading.DispatcherPriority.Input);
     }
 
-    public void SendTerminalSizeToServer()
+    public void SendTerminalSizeToServer(bool force = false)
     {
         if (_emulator != null && _connection != null && _connection.IsConnected)
         {
@@ -134,6 +179,42 @@ public partial class TerminalEmulator : UserControl
     private DispatcherTimer? _flashTimer;
     private DispatcherTimer? _lineFlashTimer;
 
+#if DEBUG
+    private bool _debugMode = false;
+    private DebugPanel? _debugPanel = null;
+
+    public bool DebugMode
+    {
+        get => _debugMode;
+        set
+        {
+            if (_debugMode != value)
+            {
+                _debugMode = value;
+                if (_emulator != null)
+                {
+                    _emulator.DebugMode = value;
+                }
+                UpdateDebugPanelVisibility();
+            }
+        }
+    }
+
+    private void UpdateDebugPanelVisibility()
+    {
+        if (_debugMode && _debugPanel == null && _emulator != null)
+        {
+            _debugPanel = new DebugPanel(_emulator);
+            // Add debug panel to UI - we'll integrate it into MainWindow
+        }
+        else if (!_debugMode && _debugPanel != null)
+        {
+            // Hide/remove debug panel
+            _debugPanel = null;
+        }
+    }
+#endif
+
     private void TerminalEmulator_Loaded(object sender, RoutedEventArgs e)
     {
         if (_typeface == null)
@@ -149,22 +230,28 @@ public partial class TerminalEmulator : UserControl
     }
     
 
+
     private void TerminalEmulator_SizeChanged(object sender, SizeChangedEventArgs e)
     {
+        // DPI might have changed, invalidate cache
+        _dpiCached = false;
+        
         if (_emulator != null && _charWidth > 0 && _charHeight > 0)
         {
             var oldCols = _emulator.Cols;
             var oldRows = _emulator.Rows;
+            
             UpdateTerminalSize();
             
             if (_connection != null && _connection.IsConnected && (oldCols != _emulator.Cols || oldRows != _emulator.Rows))
             {
-                SendTerminalSizeToServer();
+                SendTerminalSizeToServer(force: true);
             }
             
             RenderScreen();
         }
     }
+    
 
     private void InitializeFont(string fontFamily = "Consolas", double fontSize = DEFAULT_FONT_SIZE)
     {
@@ -278,15 +365,26 @@ public partial class TerminalEmulator : UserControl
         _customBackgroundColor = null;
     }
 
-    private void UpdateTerminalSize()
+    public void UpdateTerminalSize()
     {
         if (_emulator == null || _charWidth == 0 || _charHeight == 0)
         {
             return;
         }
 
-        var cols = Math.Max(1, (int)(ActualWidth / _charWidth));
-        var rows = Math.Max(1, (int)(ActualHeight / _charHeight));
+        // Use Math.Floor to round down - we only count complete columns/rows that fit
+        // Subtract 1 to account for any rounding errors or partial columns
+        var availableWidth = ActualWidth;
+        var availableHeight = ActualHeight;
+        
+        // Account for scrollbar if visible
+        if (TerminalScrollBar.Visibility == Visibility.Visible)
+        {
+            availableWidth -= TerminalScrollBar.ActualWidth;
+        }
+        
+        var cols = Math.Max(1, (int)Math.Floor(availableWidth / _charWidth));
+        var rows = Math.Max(1, (int)Math.Floor(availableHeight / _charHeight));
         _emulator.SetSize(cols, rows);
         
         Dispatcher.BeginInvoke(new Action(() =>
@@ -301,13 +399,12 @@ public partial class TerminalEmulator : UserControl
     {
         InitializeFont(fontFamily, fontSize);
         UpdateTerminalSize();
+        _colorCache.Clear(); // Clear cache when font changes
         RenderScreen();
     }
 
     private void OnDataReceived(object? sender, string data)
     {
-        var escapedData = EscapeString(data);
-
         Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
         {
             if (_emulator != null)
@@ -321,6 +418,26 @@ public partial class TerminalEmulator : UserControl
                     {
                         ResetScrollPosition();
                     }
+                }
+                
+                // Update canvas height to accommodate scrollback
+                UpdateCanvasHeight();
+                
+                // Auto-scroll to bottom if user is already at bottom (scrollOffset == 0)
+                if (_scrollOffset == 0)
+                {
+                    UpdateCanvasTransform();
+                }
+                
+                // Batch renders - only queue one render at a time
+                if (!_renderPending)
+                {
+                    _renderPending = true;
+                    Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+                    {
+                        _renderPending = false;
+                        RenderScreen();
+                    }));
                 }
             }
         }));
@@ -373,31 +490,57 @@ public partial class TerminalEmulator : UserControl
         });
     }
 
-    private void OnScreenChanged(object? sender, EventArgs e)
-    {
-        if (_emulator != null)
-        {
-            // Update canvas height to accommodate scrollback
-            UpdateCanvasHeight();
-            
-            // Auto-scroll to bottom if user is already at bottom (scrollOffset == 0)
-            // If user has scrolled up, keep their position
-            if (_scrollOffset == 0)
-            {
-                // Stay at bottom (scrollOffset remains 0)
-                UpdateCanvasTransform();
-            }
-        }
-        RenderScreen();
-    }
-
+    private bool _renderPending = false;
     private int _previousCursorRow = -1;
     private int _previousCursorCol = -1;
-
-    private void OnCursorMoved(object? sender, EventArgs e)
+    private readonly Dictionary<int, Brush> _colorCache = new Dictionary<int, Brush>();
+    private readonly System.Text.StringBuilder _textRunBuilder = new System.Text.StringBuilder();
+    private double _cachedDpi = 96.0;
+    private bool _dpiCached = false;
+    
+    // Incremental rendering: cache rendered line visuals
+    private readonly Dictionary<int, VisualHost> _renderedLines = new Dictionary<int, VisualHost>();
+    private VisualHost? _cursorVisual = null;
+    private int _lastStartLineIndex = -1;
+    private int _lastEndLineIndex = -1;
+    private int _lastViewportOffset = 0;
+    
+#if DEBUG
+    private readonly Dictionary<string, (long totalTicks, int calls, long minTicks, long maxTicks)> _renderMetrics = new Dictionary<string, (long, int, long, long)>();
+    
+    private void RecordRenderMetric(string name, long ticks)
     {
-        RenderScreen();
+        if (!_renderMetrics.ContainsKey(name))
+        {
+            _renderMetrics[name] = (0, 0, long.MaxValue, 0);
+        }
+        var (total, calls, min, max) = _renderMetrics[name];
+        _renderMetrics[name] = (total + ticks, calls + 1, Math.Min(min, ticks), Math.Max(max, ticks));
     }
+    
+    public Dictionary<string, (double avgMs, double totalMs, int calls, double minMs, double maxMs)> GetRenderMetrics()
+    {
+        var result = new Dictionary<string, (double, double, int, double, double)>();
+        var frequency = Stopwatch.Frequency;
+        foreach (var kvp in _renderMetrics)
+        {
+            var (total, calls, min, max) = kvp.Value;
+            result[kvp.Key] = (
+                (total / (double)calls) * 1000.0 / frequency,
+                total * 1000.0 / frequency,
+                calls,
+                min * 1000.0 / frequency,
+                max * 1000.0 / frequency
+            );
+        }
+        return result;
+    }
+    
+    public void ResetRenderMetrics()
+    {
+        _renderMetrics.Clear();
+    }
+#endif
 
     public event EventHandler<string>? TitleChanged;
 
@@ -409,6 +552,16 @@ public partial class TerminalEmulator : UserControl
             TitleChanged?.Invoke(this, title);
         }
     }
+
+#if DEBUG
+    private void OnDebugCommandExecuted(object? sender, Vt100Emulator.DebugCommandEventArgs e)
+    {
+        if (_debugPanel != null)
+        {
+            _debugPanel.AddCommandLog(e);
+        }
+    }
+#endif
 
     private void TerminalEmulator_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
@@ -625,6 +778,9 @@ public partial class TerminalEmulator : UserControl
     // The buffer is only modified by server output via OnDataReceived -> _emulator.ProcessData()
     private void RenderScreen()
     {
+#if DEBUG
+        var totalStopwatch = Stopwatch.StartNew();
+#endif
         if (_emulator == null || _typeface == null)
         {
             return;
@@ -632,58 +788,220 @@ public partial class TerminalEmulator : UserControl
 
         var currentCursorRow = _emulator.CursorRow;
         var currentCursorCol = _emulator.CursorCol;
-
         var lineFlashOverlay = _lineFlashOverlay;
-        TerminalCanvas.Children.Clear();
-        _lineFlashOverlay = null;
 
         var totalLines = _emulator.LineCount;
-        var visibleRows = (int)(ActualHeight / _charHeight) + 1;
+        var visibleRows = (int)(ActualHeight / _charHeight);
         
         int startLineIndex;
         int endLineIndex;
+        int viewportOffset = 0;
         
-        if (totalLines <= visibleRows)
+        if (_emulator.InAlternateScreen)
         {
-            // Buffer is smaller than viewport - render from top
+            var rows = _emulator.Rows;
+            if (totalLines <= visibleRows)
+            {
+                startLineIndex = 0;
+                endLineIndex = totalLines;
+            }
+            else
+            {
+                startLineIndex = Math.Max(0, rows - visibleRows - _scrollOffset);
+                endLineIndex = Math.Min(rows, startLineIndex + visibleRows);
+                if (_scrollOffset == 0)
+                {
+                    viewportOffset = visibleRows - (endLineIndex - startLineIndex);
+                }
+            }
+        }
+        else if (totalLines <= visibleRows)
+        {
             startLineIndex = 0;
             endLineIndex = totalLines;
         }
         else
         {
-            // Buffer is larger - show last N lines when scrollOffset = 0, or scroll up from there
-            // When scrollOffset = 0, show last visibleRows lines
-            // When scrollOffset > 0, show lines starting from (totalLines - visibleRows - scrollOffset)
             startLineIndex = Math.Max(0, totalLines - visibleRows - _scrollOffset);
             endLineIndex = Math.Min(totalLines, startLineIndex + visibleRows);
+            if (_scrollOffset == 0)
+            {
+                viewportOffset = visibleRows - (endLineIndex - startLineIndex);
+            }
         }
 
-        // Render only visible lines, positioned relative to viewport (row 0 at top of viewport)
-        for (int lineIndex = startLineIndex; lineIndex < endLineIndex; lineIndex++)
+        // Check if viewport changed (scrolling) - if so, handle graphically
+        bool viewportChanged = _lastStartLineIndex != startLineIndex || _lastEndLineIndex != endLineIndex || _lastViewportOffset != viewportOffset;
+        
+        if (viewportChanged)
         {
-            var viewportRow = lineIndex - startLineIndex; // Position in viewport (0 = top)
-            RenderLine(lineIndex, viewportRow);
+            // Viewport changed - handle scrolling graphically
+            HandleViewportChange(startLineIndex, endLineIndex, viewportOffset, visibleRows);
+            _lastStartLineIndex = startLineIndex;
+            _lastEndLineIndex = endLineIndex;
+            _lastViewportOffset = viewportOffset;
         }
 
-        // Only show cursor when at bottom (scrollOffset == 0)
-        if (_scrollOffset == 0 && currentCursorRow >= 0)
+        // Get dirty lines and render only those
+        var dirtyLines = _emulator.GetDirtyLines();
+        
+        if (dirtyLines.Count > 0 || viewportChanged || _renderedLines.Count == 0)
         {
-            RenderCursor();
+#if DEBUG
+            var renderLinesStopwatch = Stopwatch.StartNew();
+#endif
+            // Render dirty lines or all visible lines if viewport changed or initial render
+            var linesToRender = (viewportChanged || _renderedLines.Count == 0) ? 
+                Enumerable.Range(startLineIndex, endLineIndex - startLineIndex).ToHashSet() : 
+                dirtyLines;
+            
+            foreach (var lineIndex in linesToRender)
+            {
+                if (lineIndex >= startLineIndex && lineIndex < endLineIndex)
+                {
+                    RenderLineIncremental(lineIndex, startLineIndex, viewportOffset);
+                }
+            }
+            
+            _emulator.ClearDirtyLines();
+#if DEBUG
+            renderLinesStopwatch.Stop();
+            RecordRenderMetric("RenderScreen.RenderLines", renderLinesStopwatch.ElapsedTicks);
+#endif
         }
 
-        if (lineFlashOverlay != null && lineFlashOverlay.Visibility == Visibility.Visible)
-        {
-            _lineFlashOverlay = lineFlashOverlay;
-            TerminalCanvas.Children.Add(_lineFlashOverlay);
-        }
+        // Update cursor
+        UpdateCursor(currentCursorRow, currentCursorCol, startLineIndex, viewportOffset);
 
         _previousCursorRow = currentCursorRow;
         _previousCursorCol = currentCursorCol;
+#if DEBUG
+        totalStopwatch.Stop();
+        RecordRenderMetric("RenderScreen.Total", totalStopwatch.ElapsedTicks);
+#endif
+    }
+
+    private void HandleViewportChange(int startLineIndex, int endLineIndex, int viewportOffset, int visibleRows)
+    {
+        // Remove lines that are no longer visible
+        var linesToRemove = new List<int>();
+        foreach (var kvp in _renderedLines)
+        {
+            if (kvp.Key < startLineIndex || kvp.Key >= endLineIndex)
+            {
+                if (TerminalCanvas.Children.Contains(kvp.Value))
+                {
+                    TerminalCanvas.Children.Remove(kvp.Value);
+                }
+                linesToRemove.Add(kvp.Key);
+            }
+        }
+        foreach (var lineIndex in linesToRemove)
+        {
+            _renderedLines.Remove(lineIndex);
+        }
+
+        // Update positions of existing lines using transforms
+        foreach (var kvp in _renderedLines)
+        {
+            var lineIndex = kvp.Key;
+            var visual = kvp.Value;
+            var viewportRow = (lineIndex - startLineIndex) + viewportOffset;
+            var y = viewportRow * _charHeight;
+            Canvas.SetTop(visual, y);
+        }
+    }
+
+    private void RenderLineIncremental(int lineIndex, int startLineIndex, int viewportOffset)
+    {
+        var viewportRow = (lineIndex - startLineIndex) + viewportOffset;
+        var y = viewportRow * _charHeight;
+
+        // Remove old visual if it exists
+        if (_renderedLines.TryGetValue(lineIndex, out var oldVisual))
+        {
+            if (TerminalCanvas.Children.Contains(oldVisual))
+            {
+                TerminalCanvas.Children.Remove(oldVisual);
+            }
+        }
+
+        // Create new visual for this line
+        var drawingVisual = new DrawingVisual();
+        DrawingContext? dc = null;
+        try
+        {
+            dc = drawingVisual.RenderOpen();
+            RenderLine(dc, lineIndex, viewportRow);
+        }
+        finally
+        {
+            dc?.Close();
+        }
+
+        // Add to canvas
+        var host = new VisualHost(drawingVisual);
+        Canvas.SetTop(host, y);
+        Canvas.SetLeft(host, 0);
+        TerminalCanvas.Children.Add(host);
+        _renderedLines[lineIndex] = host;
+    }
+
+    private void UpdateCursor(int cursorRow, int cursorCol, int startLineIndex, int viewportOffset)
+    {
+        // Remove old cursor if it exists
+        if (_cursorVisual != null && TerminalCanvas.Children.Contains(_cursorVisual))
+        {
+            TerminalCanvas.Children.Remove(_cursorVisual);
+            _cursorVisual = null;
+        }
+
+        // Only show cursor when at bottom (scrollOffset == 0) and cursor is visible
+        if (_scrollOffset == 0 && cursorRow >= 0 && _emulator != null && _emulator.CursorVisible && 
+            cursorRow >= startLineIndex && cursorRow < startLineIndex + (int)(ActualHeight / _charHeight))
+        {
+            var drawingVisual = new DrawingVisual();
+            DrawingContext? dc = null;
+            try
+            {
+                dc = drawingVisual.RenderOpen();
+                
+                // Render cursor at y=0 relative to DrawingVisual (positioning handled by Canvas.SetTop)
+                var x = cursorCol * _charWidth;
+                var y = _charHeight - 2; // Position within the line (underline at bottom)
+
+                var cell = _emulator.GetCell(cursorRow, cursorCol);
+                var fg = cell.Reverse ? cell.BackgroundColor : cell.ForegroundColor;
+                var bg = cell.Reverse ? cell.ForegroundColor : cell.BackgroundColor;
+
+                var foregroundBrush = GetColor(fg);
+                var backgroundBrush = GetColor(bg);
+                var foregroundColor = foregroundBrush is SolidColorBrush fgSolid ? fgSolid.Color : Colors.White;
+
+                // Draw underline cursor
+                var underlineRect = new Rect(x, y, _charWidth, 2);
+                dc.DrawRectangle(foregroundBrush, null, underlineRect);
+            }
+            finally
+            {
+                dc?.Close();
+            }
+
+            var host = new VisualHost(drawingVisual);
+            var viewportRowPos = (cursorRow - startLineIndex) + viewportOffset;
+            Canvas.SetTop(host, viewportRowPos * _charHeight);
+            Canvas.SetLeft(host, 0);
+            TerminalCanvas.Children.Add(host);
+            _cursorVisual = host;
+        }
     }
 
     // Read-only: only reads from buffer, never modifies it
-    private void RenderLine(int lineIndex, int viewportRow)
+    private void RenderLine(DrawingContext dc, int lineIndex, int viewportRow)
     {
+#if DEBUG
+        var lineStopwatch = Stopwatch.StartNew();
+#endif
         if (_emulator == null || _typeface == null)
         {
             return;
@@ -694,9 +1012,18 @@ public partial class TerminalEmulator : UserControl
         {
             return;
         }
+#if DEBUG
+        var getLineStopwatch = Stopwatch.StartNew();
+#endif
+#if DEBUG
+        getLineStopwatch.Stop();
+        RecordRenderMetric("RenderLine.GetLine", getLineStopwatch.ElapsedTicks);
+#endif
 
-        // Calculate y position: viewportRow 0 is at top of viewport
-        var y = viewportRow * _charHeight;
+        // When called from RenderLineIncremental, the DrawingVisual is positioned on the Canvas,
+        // so we draw at y=0 relative to the DrawingVisual. viewportRow is only used for
+        // calculating which line to render, not for positioning.
+        var y = 0.0;
         
         // Calculate how many columns fit in the viewport width
         var viewportWidth = TerminalCanvas.ActualWidth > 0 ? TerminalCanvas.ActualWidth : ActualWidth;
@@ -707,10 +1034,50 @@ public partial class TerminalEmulator : UserControl
         }
         
         // Only render as many cells as fit in the viewport
-        var maxCol = Math.Min(line.Cells.Count, visibleCols);
+        // Cache Cells collection reference to avoid repeated property access
+        var cells = line.Cells;
+        var maxCol = Math.Min(cells.Count, visibleCols);
         
-        var currentFg = -1;
+#if DEBUG
+        var bgPassStopwatch = Stopwatch.StartNew();
+#endif
+        // First pass: draw all background rectangles (batch by color)
         var currentBg = -1;
+        var bgStartCol = 0;
+        for (int col = 0; col < maxCol; col++)
+        {
+            var cell = cells[col];
+            var bg = cell.Reverse ? cell.ForegroundColor : cell.BackgroundColor;
+            
+            if (bg != currentBg)
+            {
+                if (currentBg >= 0 && col > bgStartCol)
+                {
+                    var bgWidth = (col - bgStartCol) * _charWidth;
+                    var bgBrush = GetColor(currentBg);
+                    var bgRect = new Rect(bgStartCol * _charWidth, y, bgWidth, _charHeight);
+                    dc.DrawRectangle(bgBrush, null, bgRect);
+                }
+                bgStartCol = col;
+                currentBg = bg;
+            }
+        }
+        // Draw final background rectangle
+        if (currentBg >= 0 && maxCol > bgStartCol)
+        {
+            var bgWidth = (maxCol - bgStartCol) * _charWidth;
+            var bgBrush = GetColor(currentBg);
+            var bgRect = new Rect(bgStartCol * _charWidth, y, bgWidth, _charHeight);
+            dc.DrawRectangle(bgBrush, null, bgRect);
+        }
+#if DEBUG
+        bgPassStopwatch.Stop();
+        RecordRenderMetric("RenderLine.BackgroundPass", bgPassStopwatch.ElapsedTicks);
+#endif
+        
+        // Second pass: draw text segments (only break on foreground/style changes, not background)
+        var currentFg = -1;
+        currentBg = -1;
         var currentBold = false;
         var currentItalic = false;
         var currentUnderline = false;
@@ -720,13 +1087,22 @@ public partial class TerminalEmulator : UserControl
         var currentOverline = false;
         var currentConceal = false;
         var x = 0.0;
-        var textRun = "";
+        _textRunBuilder.Clear();
         var textRunStartCol = 0;
 
+#if DEBUG
+        var loopStopwatch = Stopwatch.StartNew();
+#endif
         // Render only cells that fit in the viewport (truncate long lines)
         for (int col = 0; col < maxCol; col++)
         {
-            var cell = line.Cells[col];
+            var cell = cells[col];
+#if DEBUG
+            if (col == 0)
+            {
+                loopStopwatch.Restart();
+            }
+#endif
 
             var fg = cell.Reverse ? cell.BackgroundColor : cell.ForegroundColor;
             var bg = cell.Reverse ? cell.ForegroundColor : cell.BackgroundColor;
@@ -739,20 +1115,21 @@ public partial class TerminalEmulator : UserControl
             var overline = cell.Overline;
             var conceal = cell.Conceal;
 
-            var isLastCell = col == maxCol - 1;
-            
-            if (fg != currentFg || bg != currentBg || bold != currentBold || italic != currentItalic || 
+            // Only break on foreground color or text style changes (not background, since backgrounds are drawn separately)
+            // This allows us to batch more text together for faster rendering
+            if (fg != currentFg || bold != currentBold || italic != currentItalic || 
                 underline != currentUnderline || faint != currentFaint || crossedOut != currentCrossedOut ||
-                doubleUnderline != currentDoubleUnderline || overline != currentOverline || conceal != currentConceal || isLastCell)
+                doubleUnderline != currentDoubleUnderline || overline != currentOverline || conceal != currentConceal)
             {
-                if (!string.IsNullOrEmpty(textRun))
+                if (_textRunBuilder.Length > 0)
                 {
-                    RenderTextSegment(x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, lineIndex);
+                    var textRun = _textRunBuilder.ToString();
+                    RenderTextSegment(dc, x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, lineIndex);
                     x += textRun.Length * _charWidth;
-                    textRun = ""; // Clear textRun after rendering
+                    _textRunBuilder.Clear();
                 }
 
-                textRun = cell.Character.ToString();
+                _textRunBuilder.Append(cell.Character);
                 textRunStartCol = col;
                 currentFg = fg;
                 currentBg = bg;
@@ -767,15 +1144,33 @@ public partial class TerminalEmulator : UserControl
             }
             else
             {
-                textRun += cell.Character;
+                // Background changed but foreground/style didn't - update background but keep batching text
+                if (bg != currentBg)
+                {
+                    currentBg = bg;
+                }
+                _textRunBuilder.Append(cell.Character);
             }
         }
 
-        // Render any remaining textRun
-        if (!string.IsNullOrEmpty(textRun))
+#if DEBUG
+        loopStopwatch.Stop();
+        if (maxCol > 0)
         {
-            RenderTextSegment(x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, lineIndex);
+            RecordRenderMetric("RenderLine.CellLoop", loopStopwatch.ElapsedTicks);
         }
+#endif
+        // Render any remaining textRun
+        if (_textRunBuilder.Length > 0)
+        {
+            var textRun = _textRunBuilder.ToString();
+            RenderTextSegment(dc, x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, lineIndex);
+            _textRunBuilder.Clear();
+        }
+#if DEBUG
+        lineStopwatch.Stop();
+        RecordRenderMetric("RenderLine.Total", lineStopwatch.ElapsedTicks);
+#endif
     }
 
     private bool IsCellSelected(int lineIndex, int col)
@@ -815,12 +1210,18 @@ public partial class TerminalEmulator : UserControl
     }
 
     // Read-only: only reads from buffer for selection state, never modifies buffer
-    private void RenderTextSegment(double x, double y, string text, int fgColor, int bgColor, bool bold, bool italic, bool underline, bool faint, bool crossedOut, bool doubleUnderline, bool overline, bool conceal, int startCol, int lineIndex)
+    private void RenderTextSegment(DrawingContext dc, double x, double y, string text, int fgColor, int bgColor, bool bold, bool italic, bool underline, bool faint, bool crossedOut, bool doubleUnderline, bool overline, bool conceal, int startCol, int lineIndex)
     {
+#if DEBUG
+        var segmentStopwatch = Stopwatch.StartNew();
+#endif
         if (_typeface == null || string.IsNullOrEmpty(text))
         {
             return;
         }
+#if DEBUG
+        var getColorStopwatch = Stopwatch.StartNew();
+#endif
 
         if (x < 0 || y < 0 || x + text.Length * _charWidth > TerminalCanvas.Width)
         {
@@ -829,8 +1230,15 @@ public partial class TerminalEmulator : UserControl
         
         var foreground = GetColor(fgColor);
         var background = GetColor(bgColor);
+#if DEBUG
+        getColorStopwatch.Stop();
+        RecordRenderMetric("RenderTextSegment.GetColor", getColorStopwatch.ElapsedTicks);
+#endif
         var fontWeight = bold ? FontWeights.Bold : FontWeights.Normal;
         var fontStyle = italic ? FontStyles.Italic : FontStyles.Normal;
+#if DEBUG
+        var selectionCheckStopwatch = Stopwatch.StartNew();
+#endif
 
         // Check if this text segment crosses selection boundary - only split if necessary
         if ((_hasSelection || _isSelecting) && text.Length > 1)
@@ -847,6 +1255,10 @@ public partial class TerminalEmulator : UserControl
                     break;
                 }
             }
+#if DEBUG
+        selectionCheckStopwatch.Stop();
+        RecordRenderMetric("RenderTextSegment.SelectionCheck", selectionCheckStopwatch.ElapsedTicks);
+#endif
             
             // If all characters have same selection state, render normally
             if (!needsSplit)
@@ -883,59 +1295,46 @@ public partial class TerminalEmulator : UserControl
                         charForeground = new SolidColorBrush(fadedColor);
                     }
 
-                    var charBgRect = new Rectangle
-                    {
-                        Width = _charWidth + 0.1,
-                        Height = _charHeight,
-                        Fill = charBackground,
-                        SnapsToDevicePixels = true
-                    };
-                    Canvas.SetLeft(charBgRect, charX);
-                    Canvas.SetTop(charBgRect, y);
-                    TerminalCanvas.Children.Add(charBgRect);
+                    // Draw background
+                    var charBgRect = new Rect(charX, y, _charWidth + 0.1, _charHeight);
+                    dc.DrawRectangle(charBackground, null, charBgRect);
 
-                    var charTextBlock = new TextBlock
-                    {
-                        Text = text[i].ToString(),
-                        Foreground = charForeground,
-                        FontFamily = _typeface.FontFamily,
-                        FontSize = _fontSize,
-                        FontWeight = fontWeight,
-                        FontStyle = fontStyle,
-                        TextDecorations = new TextDecorationCollection(),
-                        SnapsToDevicePixels = true
-                    };
-
+                    // Create FormattedText for character
+                    var charFormattedText = new FormattedText(
+                        text[i].ToString(),
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        FlowDirection.LeftToRight,
+                        _typeface,
+                        _fontSize,
+                        charForeground,
+                        VisualTreeHelper.GetDpi(this).PixelsPerDip);
+                    
+                    charFormattedText.SetFontWeight(fontWeight);
+                    charFormattedText.SetFontStyle(fontStyle);
+                    
                     if (underline || doubleUnderline)
                     {
-                        charTextBlock.TextDecorations.Add(TextDecorations.Underline);
+                        charFormattedText.SetTextDecorations(TextDecorations.Underline);
                     }
-
+                    
                     if (overline)
                     {
-                        charTextBlock.TextDecorations.Add(TextDecorations.OverLine);
+                        charFormattedText.SetTextDecorations(TextDecorations.OverLine);
                     }
-
+                    
                     if (crossedOut)
                     {
-                        charTextBlock.TextDecorations.Add(TextDecorations.Strikethrough);
+                        charFormattedText.SetTextDecorations(TextDecorations.Strikethrough);
                     }
 
-                    Canvas.SetLeft(charTextBlock, charX);
-                    Canvas.SetTop(charTextBlock, y);
-                    TerminalCanvas.Children.Add(charTextBlock);
+                    // Draw character
+                    dc.DrawText(charFormattedText, new Point(charX, y));
 
+                    // Draw double underline if needed
                     if (doubleUnderline)
                     {
-                        var underlineRect = new Rectangle
-                        {
-                            Width = _charWidth,
-                            Height = 1,
-                            Fill = charForeground
-                        };
-                        Canvas.SetLeft(underlineRect, charX);
-                        Canvas.SetTop(underlineRect, y + _charHeight - 3);
-                        TerminalCanvas.Children.Add(underlineRect);
+                        var underlineRect = new Rect(charX, y + _charHeight - 3, _charWidth, 1);
+                        dc.DrawRectangle(charForeground, null, underlineRect);
                     }
                 }
                 return;
@@ -963,64 +1362,131 @@ public partial class TerminalEmulator : UserControl
         }
         else if (faint && foreground is SolidColorBrush fgBrush)
         {
+            // Cache faint color - use a key based on the original color
             var color = fgBrush.Color;
-            var fadedColor = Color.FromArgb(color.A, (byte)(color.R * 0.5), (byte)(color.G * 0.5), (byte)(color.B * 0.5));
-            foreground = new SolidColorBrush(fadedColor);
+            var faintKey = unchecked((int)((uint)color.R << 24 | (uint)color.G << 16 | (uint)color.B << 8 | (uint)color.A));
+            if (!_colorCache.TryGetValue(faintKey, out var faintBrush))
+            {
+                var fadedColor = Color.FromArgb(color.A, (byte)(color.R * 0.5), (byte)(color.G * 0.5), (byte)(color.B * 0.5));
+                faintBrush = new SolidColorBrush(fadedColor);
+                _colorCache[faintKey] = faintBrush;
+            }
+            foreground = faintBrush;
         }
 
-        var bgRect = new Rectangle
-        {
-            Width = text.Length * _charWidth,
-            Height = _charHeight,
-            Fill = background,
-            SnapsToDevicePixels = true
-        };
-        Canvas.SetLeft(bgRect, x);
-        Canvas.SetTop(bgRect, y);
-        TerminalCanvas.Children.Add(bgRect);
+#if DEBUG
+        var createElementsStopwatch = Stopwatch.StartNew();
+#endif
+        // Background is drawn separately in first pass, skip it here (unless we need per-character backgrounds for selection)
 
-        var textBlock = new TextBlock
+        // Use GlyphRun for faster rendering if available, otherwise fall back to FormattedText
+        if (_glyphTypeface != null && !bold && !italic && !underline && !overline && !crossedOut && !doubleUnderline)
         {
-            Text = text,
-            Foreground = foreground,
-            FontFamily = _typeface.FontFamily,
-            FontSize = _fontSize,
-            FontWeight = fontWeight,
-            FontStyle = fontStyle,
-            TextDecorations = new TextDecorationCollection()
-        };
+            // Fast path: use GlyphRun for plain text
+            // Pre-allocate arrays to avoid List allocations and resizing
+            var textLength = text.Length;
+            var glyphIndices = new ushort[textLength];
+            var advanceWidths = new double[textLength];
+            int glyphCount = 0;
+            
+            // Cache advance width multiplier and array reference
+            var advanceMultiplier = _fontSize;
+            var advanceWidthsArray = _glyphTypeface.AdvanceWidths;
+            
+            foreach (var ch in text)
+            {
+                if (_glyphTypeface.CharacterToGlyphMap.TryGetValue(ch, out var glyphIndex))
+                {
+                    glyphIndices[glyphCount] = glyphIndex;
+                    advanceWidths[glyphCount] = advanceWidthsArray[glyphIndex] * advanceMultiplier;
+                    glyphCount++;
+                }
+            }
+            
+            if (glyphCount > 0)
+            {
+                // Cache DPI value to avoid repeated calls
+                if (!_dpiCached)
+                {
+                    _cachedDpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+                    _dpiCached = true;
+                }
+                
+                var glyphRun = new GlyphRun(
+                    _glyphTypeface,
+                    0,
+                    false,
+                    _fontSize,
+                    (float)_cachedDpi,
+                    glyphIndices,
+                    new Point(x, y + _glyphTypeface.Baseline * _fontSize),
+                    advanceWidths,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null);
+                
+                dc.DrawGlyphRun(foreground, glyphRun);
+            }
+        }
+        else
+        {
+            // Fallback to FormattedText for styled text
+            // Cache DPI value to avoid repeated calls
+            if (!_dpiCached)
+            {
+                _cachedDpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+                _dpiCached = true;
+            }
+            
+            // Create FormattedText for rendering
+            var formattedText = new FormattedText(
+                text,
+                CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight,
+                _typeface,
+                _fontSize,
+                foreground,
+                _cachedDpi);
+            
+            formattedText.SetFontWeight(fontWeight);
+            formattedText.SetFontStyle(fontStyle);
+            
+            if (underline || doubleUnderline)
+            {
+                formattedText.SetTextDecorations(TextDecorations.Underline);
+            }
+            
+            if (overline)
+            {
+                formattedText.SetTextDecorations(TextDecorations.OverLine);
+            }
+            
+            if (crossedOut)
+            {
+                formattedText.SetTextDecorations(TextDecorations.Strikethrough);
+            }
 
-        if (underline || doubleUnderline)
-        {
-            textBlock.TextDecorations.Add(TextDecorations.Underline);
+            // Draw text
+            dc.DrawText(formattedText, new Point(x, y));
         }
 
-        if (overline)
-        {
-            textBlock.TextDecorations.Add(TextDecorations.OverLine);
-        }
-
-        if (crossedOut)
-        {
-            textBlock.TextDecorations.Add(TextDecorations.Strikethrough);
-        }
-
-        Canvas.SetLeft(textBlock, x);
-        Canvas.SetTop(textBlock, y);
-        TerminalCanvas.Children.Add(textBlock);
-
+        // Draw double underline if needed
         if (doubleUnderline)
         {
-            var underlineRect = new Rectangle
-            {
-                Width = text.Length * _charWidth,
-                Height = 1,
-                Fill = foreground
-            };
-            Canvas.SetLeft(underlineRect, x);
-            Canvas.SetTop(underlineRect, y + _charHeight - 3);
-            TerminalCanvas.Children.Add(underlineRect);
+            var underlineRect = new Rect(x, y + _charHeight - 3, text.Length * _charWidth, 1);
+            dc.DrawRectangle(foreground, null, underlineRect);
         }
+#if DEBUG
+        createElementsStopwatch.Stop();
+        RecordRenderMetric("RenderTextSegment.CreateElements", createElementsStopwatch.ElapsedTicks);
+#endif
+#if DEBUG
+        segmentStopwatch.Stop();
+        RecordRenderMetric("RenderTextSegment.Total", segmentStopwatch.ElapsedTicks);
+#endif
     }
 
     private int GetLineIndexAtViewportRow(int viewportRow)
@@ -1031,25 +1497,58 @@ public partial class TerminalEmulator : UserControl
         }
         
         var totalLines = _emulator.LineCount;
-        var visibleRows = (int)(ActualHeight / _charHeight) + 1;
+        // Calculate number of complete lines that fit in viewport (no partial lines)
+        var visibleRows = (int)(ActualHeight / _charHeight);
         
         int startLineIndex;
-        if (totalLines <= visibleRows)
+        int viewportOffset = 0;
+        
+        if (_emulator.InAlternateScreen)
+        {
+            // Alternate screen: when buffer is larger than viewport and scrollOffset == 0, fix last line at bottom
+            var rows = _emulator.Rows;
+            if (totalLines <= visibleRows)
+            {
+                startLineIndex = 0;
+            }
+            else
+            {
+                startLineIndex = Math.Max(0, rows - visibleRows - _scrollOffset);
+                if (_scrollOffset == 0)
+                {
+                    var endLineIndex = Math.Min(rows, startLineIndex + visibleRows);
+                    viewportOffset = visibleRows - (endLineIndex - startLineIndex);
+                }
+            }
+        }
+        else if (totalLines <= visibleRows)
         {
             startLineIndex = 0;
         }
         else
         {
             startLineIndex = Math.Max(0, totalLines - visibleRows - _scrollOffset);
+            if (_scrollOffset == 0)
+            {
+                var endLineIndex = Math.Min(totalLines, startLineIndex + visibleRows);
+                viewportOffset = visibleRows - (endLineIndex - startLineIndex);
+            }
         }
         
-        return Math.Min(startLineIndex + viewportRow, totalLines - 1);
+        // Adjust viewportRow by offset to get actual line index
+        var adjustedViewportRow = viewportRow - viewportOffset;
+        if (adjustedViewportRow < 0)
+        {
+            return 0; // Above visible area
+        }
+        
+        return Math.Min(startLineIndex + adjustedViewportRow, totalLines - 1);
     }
 
     // Read-only: only reads cursor position from buffer, never modifies it
-    private void RenderCursor()
+    private void RenderCursor(DrawingContext dc)
     {
-        if (_emulator == null || _typeface == null)
+        if (_emulator == null || _typeface == null || dc == null)
         {
             return;
         }
@@ -1059,16 +1558,42 @@ public partial class TerminalEmulator : UserControl
         
         // Calculate viewport position for cursor
         var totalLines = _emulator.LineCount;
-        var visibleRows = (int)(ActualHeight / _charHeight) + 1;
+        // Calculate number of complete lines that fit in viewport (no partial lines)
+        var visibleRows = (int)(ActualHeight / _charHeight);
         
         int startLineIndex;
-        if (totalLines <= visibleRows)
+        int viewportOffset = 0;
+        
+        if (_emulator.InAlternateScreen)
+        {
+            // Alternate screen: when buffer is larger than viewport and scrollOffset == 0, fix last line at bottom
+            var rows = _emulator.Rows;
+            if (totalLines <= visibleRows)
+            {
+                startLineIndex = 0;
+            }
+            else
+            {
+                startLineIndex = Math.Max(0, rows - visibleRows - _scrollOffset);
+                if (_scrollOffset == 0)
+                {
+                    var endLineIndex = Math.Min(rows, startLineIndex + visibleRows);
+                    viewportOffset = visibleRows - (endLineIndex - startLineIndex);
+                }
+            }
+        }
+        else if (totalLines <= visibleRows)
         {
             startLineIndex = 0;
         }
         else
         {
             startLineIndex = Math.Max(0, totalLines - visibleRows - _scrollOffset);
+            if (_scrollOffset == 0)
+            {
+                var endLineIndex = Math.Min(totalLines, startLineIndex + visibleRows);
+                viewportOffset = visibleRows - (endLineIndex - startLineIndex);
+            }
         }
         
         // Only render cursor if it's in the visible range and at bottom (scrollOffset == 0)
@@ -1085,7 +1610,7 @@ public partial class TerminalEmulator : UserControl
             return;
         }
         
-        var viewportRow = cursorLineIndex - startLineIndex;
+        var viewportRow = (cursorLineIndex - startLineIndex) + viewportOffset;
         var x = cursorCol * _charWidth;
         var y = viewportRow * _charHeight;
 
@@ -1110,48 +1635,115 @@ public partial class TerminalEmulator : UserControl
 
     private Brush GetColor(int colorIndex)
     {
+        if (_colorCache.TryGetValue(colorIndex, out var cachedBrush))
+        {
+            return cachedBrush;
+        }
+        
+        Brush brush;
         if (colorIndex == 0 && !string.IsNullOrEmpty(_customBackgroundColor))
         {
             try
             {
-                return new BrushConverter().ConvertFromString(_customBackgroundColor) as Brush ?? new SolidColorBrush(Color.FromRgb(0, 0, 0));
+                brush = new BrushConverter().ConvertFromString(_customBackgroundColor) as Brush ?? new SolidColorBrush(Color.FromRgb(0, 0, 0));
             }
             catch
             {
+                brush = new SolidColorBrush(Color.FromRgb(0, 0, 0));
             }
         }
-        
-        if (colorIndex == 7 && !string.IsNullOrEmpty(_customForegroundColor))
+        else if (colorIndex == 7 && !string.IsNullOrEmpty(_customForegroundColor))
         {
             try
             {
-                return new BrushConverter().ConvertFromString(_customForegroundColor) as Brush ?? new SolidColorBrush(Color.FromRgb(192, 192, 192));
+                brush = new BrushConverter().ConvertFromString(_customForegroundColor) as Brush ?? new SolidColorBrush(Color.FromRgb(192, 192, 192));
             }
             catch
             {
+                brush = new SolidColorBrush(Color.FromRgb(192, 192, 192));
             }
         }
-        
-        return colorIndex switch
+        else if ((colorIndex & 0x1000000) != 0)
         {
-            0 => new SolidColorBrush(Color.FromRgb(0, 0, 0)),
-            1 => new SolidColorBrush(Color.FromRgb(192, 0, 0)),
-            2 => new SolidColorBrush(Color.FromRgb(0, 192, 0)),
-            3 => new SolidColorBrush(Color.FromRgb(192, 192, 0)),
-            4 => new SolidColorBrush(Color.FromRgb(0, 0, 255)),
-            5 => new SolidColorBrush(Color.FromRgb(192, 0, 192)),
-            6 => new SolidColorBrush(Color.FromRgb(0, 192, 192)),
-            7 => new SolidColorBrush(Color.FromRgb(255, 255, 255)),
-            8 => new SolidColorBrush(Color.FromRgb(128, 128, 128)),
-            9 => new SolidColorBrush(Color.FromRgb(255, 0, 0)),
-            10 => new SolidColorBrush(Color.FromRgb(0, 255, 0)),
-            11 => new SolidColorBrush(Color.FromRgb(255, 255, 0)),
-            12 => new SolidColorBrush(Color.FromRgb(80, 80, 255)),
-            13 => new SolidColorBrush(Color.FromRgb(255, 0, 255)),
-            14 => new SolidColorBrush(Color.FromRgb(0, 255, 255)),
-            15 => new SolidColorBrush(Color.FromRgb(255, 255, 255)),
-            _ => Brushes.White
-        };
+            // RGB color: 0x1000000 | (r << 16) | (g << 8) | b
+            var r = (byte)((colorIndex >> 16) & 0xFF);
+            var g = (byte)((colorIndex >> 8) & 0xFF);
+            var b = (byte)(colorIndex & 0xFF);
+            brush = new SolidColorBrush(Color.FromRgb(r, g, b));
+        }
+        else if (colorIndex >= 16 && colorIndex <= 255)
+        {
+            // 256-color palette
+            brush = Get256Color(colorIndex);
+        }
+        else if ((colorIndex & 0x1000000) != 0)
+        {
+            // RGB color: 0x1000000 | (r << 16) | (g << 8) | b
+            var r = (byte)((colorIndex >> 16) & 0xFF);
+            var g = (byte)((colorIndex >> 8) & 0xFF);
+            var b = (byte)(colorIndex & 0xFF);
+            brush = new SolidColorBrush(Color.FromRgb(r, g, b));
+        }
+        else if (colorIndex >= 16 && colorIndex <= 255)
+        {
+            // 256-color palette
+            brush = Get256Color(colorIndex);
+        }
+        else
+        {
+            brush = colorIndex switch
+            {
+                0 => new SolidColorBrush(Color.FromRgb(0, 0, 0)),
+                1 => new SolidColorBrush(Color.FromRgb(192, 0, 0)),
+                2 => new SolidColorBrush(Color.FromRgb(0, 192, 0)),
+                3 => new SolidColorBrush(Color.FromRgb(192, 192, 0)),
+                4 => new SolidColorBrush(Color.FromRgb(0, 0, 255)),
+                5 => new SolidColorBrush(Color.FromRgb(192, 0, 192)),
+                6 => new SolidColorBrush(Color.FromRgb(0, 192, 192)),
+                7 => new SolidColorBrush(Color.FromRgb(255, 255, 255)),
+                8 => new SolidColorBrush(Color.FromRgb(128, 128, 128)),
+                9 => new SolidColorBrush(Color.FromRgb(255, 0, 0)),
+                10 => new SolidColorBrush(Color.FromRgb(0, 255, 0)),
+                11 => new SolidColorBrush(Color.FromRgb(255, 255, 0)),
+                12 => new SolidColorBrush(Color.FromRgb(80, 80, 255)),
+                13 => new SolidColorBrush(Color.FromRgb(255, 0, 255)),
+                14 => new SolidColorBrush(Color.FromRgb(0, 255, 255)),
+                15 => new SolidColorBrush(Color.FromRgb(255, 255, 255)),
+                _ => Brushes.White
+            };
+        }
+        
+        _colorCache[colorIndex] = brush;
+        return brush;
+    }
+    
+    private Brush Get256Color(int colorIndex)
+    {
+        // Standard 256-color palette
+        // Colors 0-15: standard colors (already handled in GetColor)
+        // Colors 16-231: 6x6x6 color cube
+        // Colors 232-255: grayscale
+        
+        if (colorIndex >= 232 && colorIndex <= 255)
+        {
+            // Grayscale: 232-255
+            var gray = (byte)(8 + (colorIndex - 232) * 10);
+            return new SolidColorBrush(Color.FromRgb(gray, gray, gray));
+        }
+        else if (colorIndex >= 16 && colorIndex <= 231)
+        {
+            // 6x6x6 color cube: 16 + 36*r + 6*g + b, where r,g,b are 0-5
+            var index = colorIndex - 16;
+            var r = index / 36;
+            var g = (index % 36) / 6;
+            var b = index % 6;
+            var red = (byte)(r == 0 ? 0 : 55 + r * 40);
+            var green = (byte)(g == 0 ? 0 : 55 + g * 40);
+            var blue = (byte)(b == 0 ? 0 : 55 + b * 40);
+            return new SolidColorBrush(Color.FromRgb(red, green, blue));
+        }
+        
+        return Brushes.White;
     }
 
     private void TerminalEmulator_PreviewMouseDown(object sender, MouseButtonEventArgs e)
@@ -2074,5 +2666,6 @@ public partial class TerminalEmulator : UserControl
 
         return "\n";
     }
+}
 }
 

@@ -28,42 +28,40 @@ public class AnsiParser
             return;
         }
 
+        // Process character by character in strict order - no batching, no reordering
+        // This ensures commands and text are processed in the exact order they appear
         var span = data.AsSpan();
         int i = 0;
         
+        // Optimize: cache event handler to avoid null check on every character
+        var characterHandler = CharacterReceived;
+        
         while (i < span.Length)
         {
+            char c = span[i];
+            
             if (_state == AnsiState.Normal)
             {
-                int normalStart = i;
-                while (i < span.Length && span[i] != ESC && span[i] >= 32 && span[i] != 127)
+                // In normal state, emit printable characters immediately
+                // Don't batch them - process each one as it's encountered
+                if (c == ESC)
                 {
-                    i++;
+                    // Start of escape sequence - process it
+                    ProcessCharacter(c);
                 }
-                
-                if (i > normalStart)
+                else if (characterHandler != null)
                 {
-                    var normalText = span.Slice(normalStart, i - normalStart);
-                    if (CharacterReceived != null)
-                    {
-                        foreach (var c in normalText)
-                        {
-                            CharacterReceived.Invoke(this, c);
-                        }
-                    }
-                }
-                
-                if (i < span.Length)
-        {
-                    ProcessCharacter(span[i]);
-                    i++;
+                    // Printable or control character - emit immediately
+                    characterHandler.Invoke(this, c);
                 }
             }
             else
             {
-                ProcessCharacter(span[i]);
-                i++;
+                // In escape sequence state - process character to continue/complete sequence
+                ProcessCharacter(c);
             }
+            
+            i++;
         }
     }
 
@@ -185,7 +183,8 @@ public class AnsiParser
             var command = new AnsiCommand
             {
                 Type = AnsiCommandType.SingleChar,
-                FinalChar = '7'
+                FinalChar = '7',
+                RawText = "\x1B7"
             };
             CommandReceived?.Invoke(this, command);
             _state = AnsiState.Normal;
@@ -195,28 +194,31 @@ public class AnsiParser
             var command = new AnsiCommand
             {
                 Type = AnsiCommandType.SingleChar,
-                FinalChar = '8'
+                FinalChar = '8',
+                RawText = "\x1B8"
             };
             CommandReceived?.Invoke(this, command);
             _state = AnsiState.Normal;
         }
         else if (c == 'N')
         {
-            var command = new AnsiCommand { Type = AnsiCommandType.SingleChar, FinalChar = 'N' };
+            var command = new AnsiCommand { Type = AnsiCommandType.SingleChar, FinalChar = 'N', RawText = "\x1BN" };
             CommandReceived?.Invoke(this, command);
             _state = AnsiState.Normal;
         }
         else if (c == 'O')
         {
-            var command = new AnsiCommand { Type = AnsiCommandType.SingleChar, FinalChar = 'O' };
+            var command = new AnsiCommand { Type = AnsiCommandType.SingleChar, FinalChar = 'O', RawText = "\x1BO" };
             CommandReceived?.Invoke(this, command);
             _state = AnsiState.Normal;
         }
-        else if (c == 'B')
+        else if (c >= 0x20 && c <= 0x2F)
         {
-            var command = new AnsiCommand { Type = AnsiCommandType.SingleChar, FinalChar = 'B' };
-            CommandReceived?.Invoke(this, command);
-            _state = AnsiState.Normal;
+            // Intermediate character - used for character set designation and other commands
+            // Examples: ESC ( B (Designate G0 Character Set), ESC ) B (Designate G1 Character Set)
+            _state = AnsiState.EscapeIntermediate;
+            _buffer.Clear();
+            _buffer.Append(c);
         }
         else if (c == 'X')
         {
@@ -249,12 +251,6 @@ public class AnsiParser
         {
             _state = AnsiState.Normal;
         }
-        else if (c >= 0x20 && c <= 0x2F)
-        {
-            _state = AnsiState.EscapeIntermediate;
-            _buffer.Clear();
-            _buffer.Append(c);
-        }
         else if (c >= 0x40 && c <= 0x5F)
         {
             _state = AnsiState.Normal;
@@ -275,12 +271,14 @@ public class AnsiParser
             {
                 var paramString = _buffer.ToString();
                 var isPrivate = paramString.StartsWith("?");
+                var rawText = $"\x1B[{(isPrivate ? "?" : "")}{paramString}{c}";
                 var command = new AnsiCommand
                 {
                     Type = AnsiCommandType.Csi,
                     Parameters = ParseParameters(paramString),
                     FinalChar = c,
-                    IsPrivate = isPrivate
+                    IsPrivate = isPrivate,
+                    RawText = rawText
                 };
                 CommandReceived?.Invoke(this, command);
                 _state = AnsiState.Normal;
@@ -396,11 +394,13 @@ public class AnsiParser
         {
             return;
         }
+        var rawText = $"\x1B]{oscString}\x07";
         var command = new AnsiCommand
         {
             Type = AnsiCommandType.Osc,
             Parameters = new List<int>(),
-            OscString = oscString
+            OscString = oscString,
+            RawText = rawText
         };
         var parts = oscString.Split(';', 2);
         if (parts.Length > 0 && int.TryParse(parts[0], out int oscCode))
@@ -515,25 +515,14 @@ public class AnsiParser
 
     private void ProcessEscapeIntermediateCharacter(char c)
     {
-        if (c >= 0x30 && c <= 0x7E)
-        {
-            var command = new AnsiCommand
-            {
-                Type = AnsiCommandType.SingleChar,
-                FinalChar = c
-            };
-            CommandReceived?.Invoke(this, command);
-            _state = AnsiState.Normal;
-            _buffer.Clear();
-        }
-        else if (c == 0x1B)
+        // Character set designation commands: ESC ( B, ESC ) B, ESC * B, ESC + B, etc.
+        // These are used to select character sets and should be silently ignored (no-op)
+        // The intermediate character (like '(') is in the buffer, and the final character (like 'B') is c
+        // Just reset to normal state - we don't need to process these commands
+        if (c == 0x1B)
         {
             _state = AnsiState.Escape;
             _buffer.Clear();
-        }
-        else if (c >= 0x20 && c <= 0x2F)
-        {
-            _buffer.Append(c);
         }
         else
         {
@@ -561,6 +550,7 @@ public class AnsiCommand
     public char FinalChar { get; set; }
     public bool IsPrivate { get; set; }
     public string? OscString { get; set; }
+    public string RawText { get; set; } = string.Empty;
 }
 
 public enum AnsiCommandType
