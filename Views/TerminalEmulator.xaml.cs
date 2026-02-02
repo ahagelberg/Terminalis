@@ -164,13 +164,12 @@ namespace TabbySSH.Views
 
     public void SendTerminalSizeToServer(bool force = false)
     {
-        if (_emulator != null && _connection != null && _connection.IsConnected)
-        {
-            if (_connection is SshConnection sshConn)
-            {
-                sshConn.ResizeTerminal(_emulator.Cols, _emulator.Rows);
-            }
-        }
+        if (_emulator == null || _connection == null || !_connection.IsConnected)
+            return;
+        if (_emulator.Cols <= 1 || _emulator.Rows <= 1)
+            return;
+        if (_connection is SshConnection sshConn)
+            sshConn.ResizeTerminal(_emulator.Cols, _emulator.Rows);
     }
 
     private string? _customForegroundColor;

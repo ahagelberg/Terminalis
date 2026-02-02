@@ -252,33 +252,44 @@ public partial class MainWindow : Window
         {
             TerminalTabs.SelectedItem = tabs[0].tab;
             UpdateTitleBarColor();
-            
+
             foreach (var item in tabs)
             {
-                _ = Task.Run(async () =>
+                await Dispatcher.InvokeAsync(() =>
                 {
-                    try
-                    {
-                        var (connected, error) = await ConnectSessionAsync(item.tab, item.config, removeTabOnFailure: true);
-                        if (!connected)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Error connecting session {item.config.Id}: {error ?? "Unknown error"}");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Error connecting session {item.config.Id}: {ex.Message}");
-                        await Dispatcher.InvokeAsync(() =>
-                        {
-                            if (TerminalTabs.Items.Contains(item.tab))
-                            {
-                                TerminalTabs.Items.Remove(item.tab);
-                            }
-                        });
-                    }
+                    TerminalTabs.SelectedItem = item.tab;
                 });
+                await Dispatcher.InvokeAsync(new Action(() => { }), System.Windows.Threading.DispatcherPriority.Loaded);
+                try
+                {
+                    var (connected, error) = await ConnectSessionAsync(item.tab, item.config, removeTabOnFailure: true);
+                    if (!connected)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error connecting session {item.config.Id}: {error ?? "Unknown error"}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error connecting session {item.config.Id}: {ex.Message}");
+                    await Dispatcher.InvokeAsync(() =>
+                    {
+                        if (TerminalTabs.Items.Contains(item.tab))
+                        {
+                            TerminalTabs.Items.Remove(item.tab);
+                        }
+                    });
+                }
             }
-            
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (tabs.Count > 0 && TerminalTabs.Items.Contains(tabs[0].tab))
+                {
+                    TerminalTabs.SelectedItem = tabs[0].tab;
+                }
+                UpdateTitleBarColor();
+            });
+
             if (tabs.Count > 0 && TerminalTabs.Items.Count > 0)
             {
                 StatusTextBlock.Text = $"Restored {tabs.Count} session(s)";
@@ -746,6 +757,11 @@ public partial class MainWindow : Window
                 if (isConnected)
                 {
                     tab.UpdateStatusIndicator(ConnectionStatus.Connected);
+                    _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+                    {
+                        tab.Terminal.UpdateTerminalSize();
+                        tab.Terminal.SendTerminalSizeToServer(force: true);
+                    }));
                 }
                 else if (tab.SessionConfig != null && 
                     (tab.SessionConfig.AutoReconnectMode == AutoReconnectMode.OnFocus || 
