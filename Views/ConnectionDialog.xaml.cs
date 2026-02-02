@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -57,10 +58,32 @@ public partial class ConnectionDialog : Window
         
         Loaded += (s, e) =>
         {
+            PopulateFontFamilyComboBox();
             UpdateColorBoxes();
             LoadGatewaySessions();
             SectionForwarding.SizeChanged += (_, _) => UpdateBottomSpacerHeight();
         };
+    }
+
+    private static readonly string[] PreferredMonospaceFonts = { "Consolas", "Courier New", "Lucida Console", "Cascadia Code", "Cascadia Mono", "Cascadia Code PL", "Cascadia Mono PL" };
+
+    private static System.Collections.Generic.List<string> GetInstalledMonospaceFontNames()
+    {
+        var installed = Fonts.SystemFontFamilies.Select(f => f.Source).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return PreferredMonospaceFonts.Where(name => installed.Contains(name)).ToList();
+    }
+
+    private void PopulateFontFamilyComboBox()
+    {
+        var list = GetInstalledMonospaceFontNames();
+        var currentFont = _existingConfig?.FontFamily ?? "Consolas";
+        if (!string.IsNullOrEmpty(currentFont) && !list.Any(f => string.Equals(f, currentFont, StringComparison.OrdinalIgnoreCase)))
+            list.Insert(0, currentFont);
+        if (list.Count == 0)
+            list.Add("Consolas");
+        FontFamilyComboBox.ItemsSource = list;
+        var toSelect = list.FirstOrDefault(f => string.Equals(f, currentFont, StringComparison.OrdinalIgnoreCase)) ?? list[0];
+        FontFamilyComboBox.SelectedItem = toSelect;
     }
 
     public ConnectionDialog(SshSessionConfiguration existingConfig, bool liveEditMode = false, Services.SessionManager? sessionManager = null) : this(sessionManager)
@@ -105,7 +128,6 @@ public partial class ConnectionDialog : Window
         
         _selectedAccentColor = existingConfig.Color;
         
-        FontFamilyComboBox.Text = existingConfig.FontFamily;
         FontSizeTextBox.Text = existingConfig.FontSize.ToString();
         
         _selectedForegroundColor = existingConfig.ForegroundColor;
@@ -368,7 +390,7 @@ public partial class ConnectionDialog : Window
             Group = _existingConfig?.Group,
             Order = _existingConfig?.Order ?? 0,
             PortForwardingRules = portForwardingRules,
-            FontFamily = string.IsNullOrWhiteSpace(FontFamilyComboBox.Text) ? "Consolas" : FontFamilyComboBox.Text,
+            FontFamily = (FontFamilyComboBox.SelectedItem?.ToString() ?? FontFamilyComboBox.Text ?? "Consolas").Trim(),
                 FontSize = double.TryParse(FontSizeTextBox.Text, out double fontSize) && fontSize > 0 ? fontSize : 12.0,
             ForegroundColor = _selectedForegroundColor,
             BackgroundColor = _selectedBackgroundColor,

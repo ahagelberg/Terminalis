@@ -164,14 +164,7 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="Font Family:" VerticalAlignment="Center" Foreground="{DynamicResource WindowForeground}"/>
-                                    <ComboBox Grid.Column="1" x:Name="FontFamilyComboBox" Margin="10,0,0,0" IsEditable="False">
-                                        <ComboBoxItem Content="Consolas"/>
-                                        <ComboBoxItem Content="Courier New"/>
-                                        <ComboBoxItem Content="Lucida Console"/>
-                                        <ComboBoxItem Content="Monaco"/>
-                                        <ComboBoxItem Content="DejaVu Sans Mono"/>
-                                        <ComboBoxItem Content="Source Code Pro"/>
-                                    </ComboBox>
+                                    <ComboBox Grid.Column="1" x:Name="FontFamilyComboBox" Margin="10,0,0,0" IsEditable="False"/>
                                 </Grid>
                                 <Grid Margin="0,8">
                                     <Grid.ColumnDefinitions>

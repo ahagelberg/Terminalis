@@ -254,6 +254,9 @@ namespace TabbySSH.Views
 
     private void InitializeFont(string fontFamily = "Consolas", double fontSize = DEFAULT_FONT_SIZE)
     {
+        var installed = Fonts.SystemFontFamilies.Select(f => f.Source).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(fontFamily) || !installed.Contains(fontFamily))
+            fontFamily = "Consolas";
         _typeface = new Typeface(new FontFamily(fontFamily), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
         var formattedText = new FormattedText("M", System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight, _typeface, fontSize, Brushes.White, VisualTreeHelper.GetDpi(this).PixelsPerDip);
         _charWidth = formattedText.Width;
@@ -327,10 +330,25 @@ namespace TabbySSH.Views
         
         if (fontChanged)
         {
+            ClearRenderedLines();
             UpdateTerminalSize();
+            SendTerminalSizeToServer(force: true);
         }
         
         RenderScreen();
+    }
+
+    private void ClearRenderedLines()
+    {
+        foreach (var kvp in _renderedLines)
+        {
+            if (TerminalCanvas.Children.Contains(kvp.Value))
+                TerminalCanvas.Children.Remove(kvp.Value);
+        }
+        _renderedLines.Clear();
+        _lastStartLineIndex = -1;
+        _lastEndLineIndex = -1;
+        _lastViewportOffset = 0;
     }
 
     private void ApplyBackgroundColor(string colorName)
@@ -397,8 +415,9 @@ namespace TabbySSH.Views
     public void UpdateFont(string fontFamily, double fontSize)
     {
         InitializeFont(fontFamily, fontSize);
+        ClearRenderedLines();
         UpdateTerminalSize();
-        _colorCache.Clear(); // Clear cache when font changes
+        _colorCache.Clear();
         RenderScreen();
     }
 
