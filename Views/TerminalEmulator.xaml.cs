@@ -767,13 +767,14 @@ namespace TabbySSH.Views
             _lastViewportOffset = viewportOffset;
         }
 
-        // Get dirty lines and render only those
+        // Get dirty lines and render only those (also re-render visible lines when selection changes so highlight is drawn)
         var dirtyLines = _emulator.GetDirtyLines();
+        bool selectionActive = _hasSelection || _isSelecting;
         
-        if (dirtyLines.Count > 0 || viewportChanged || _renderedLines.Count == 0)
+        if (dirtyLines.Count > 0 || viewportChanged || _renderedLines.Count == 0 || selectionActive)
         {
-            // Render dirty lines or all visible lines if viewport changed or initial render
-            var linesToRender = (viewportChanged || _renderedLines.Count == 0) ? 
+            // Render dirty lines, or all visible lines if viewport changed, initial render, or selection state changed
+            var linesToRender = (viewportChanged || _renderedLines.Count == 0 || selectionActive) ? 
                 Enumerable.Range(startLineIndex, endLineIndex - startLineIndex).ToHashSet() : 
                 dirtyLines;
             
@@ -942,13 +943,15 @@ namespace TabbySSH.Views
         var cells = line.Cells;
         var maxCol = Math.Min(cells.Count, visibleCols);
 
-        // First pass: draw all background rectangles (batch by color)
+        // First pass: draw all background rectangles (batch by color). For selected cells use inverted (fg) color so highlight is visible.
         var currentBg = -1;
         var bgStartCol = 0;
         for (int col = 0; col < maxCol; col++)
         {
             var cell = cells[col];
-            var bg = cell.Reverse ? cell.ForegroundColor : cell.BackgroundColor;
+            var cellBg = cell.Reverse ? cell.ForegroundColor : cell.BackgroundColor;
+            var cellFg = cell.Reverse ? cell.BackgroundColor : cell.ForegroundColor;
+            var bg = (_hasSelection || _isSelecting) && IsCellSelected(lineIndex, col) ? cellFg : cellBg;
             
             if (bg != currentBg)
             {
@@ -1052,35 +1055,38 @@ namespace TabbySSH.Views
 
     private bool IsCellSelected(int lineIndex, int col)
     {
-        if (!_selectionStartRow.HasValue || !_selectionStartCol.HasValue || 
+        if (!_selectionStartRow.HasValue || !_selectionStartCol.HasValue ||
             !_selectionEndRow.HasValue || !_selectionEndCol.HasValue)
         {
             return false;
         }
 
-        var startRow = Math.Min(_selectionStartRow.Value, _selectionEndRow.Value);
-        var endRow = Math.Max(_selectionStartRow.Value, _selectionEndRow.Value);
-        var startCol = Math.Min(_selectionStartCol.Value, _selectionEndCol.Value);
-        var endCol = Math.Max(_selectionStartCol.Value, _selectionEndCol.Value);
+        var topRow = Math.Min(_selectionStartRow.Value, _selectionEndRow.Value);
+        var bottomRow = Math.Max(_selectionStartRow.Value, _selectionEndRow.Value);
+        // Use actual start/end columns per row so ending on an empty line (endCol=0) doesn't pull start to column 0
+        var colOnTopRow = _selectionStartRow.Value <= _selectionEndRow.Value ? _selectionStartCol.Value : _selectionEndCol.Value;
+        var colOnBottomRow = _selectionStartRow.Value <= _selectionEndRow.Value ? _selectionEndCol.Value : _selectionStartCol.Value;
 
-        if (lineIndex < startRow || lineIndex > endRow)
+        if (lineIndex < topRow || lineIndex > bottomRow)
         {
             return false;
         }
 
-        if (lineIndex == startRow && lineIndex == endRow)
+        if (topRow == bottomRow)
         {
-            return col >= startCol && col < endCol;
+            var colMin = Math.Min(colOnTopRow, colOnBottomRow);
+            var colMax = Math.Max(colOnTopRow, colOnBottomRow);
+            return col >= colMin && col < colMax;
         }
 
-        if (lineIndex == startRow)
+        if (lineIndex == topRow)
         {
-            return col >= startCol;
+            return col >= colOnTopRow;
         }
 
-        if (lineIndex == endRow)
+        if (lineIndex == bottomRow)
         {
-            return col < endCol;
+            return col < colOnBottomRow;
         }
 
         return true;
@@ -1861,48 +1867,44 @@ namespace TabbySSH.Views
 
     private void CopySelectionToClipboard()
     {
-        if (!_selectionStartRow.HasValue || !_selectionStartCol.HasValue || 
+        if (!_selectionStartRow.HasValue || !_selectionStartCol.HasValue ||
             !_selectionEndRow.HasValue || !_selectionEndCol.HasValue || _emulator == null)
         {
             return;
         }
 
-        var startRow = Math.Min(_selectionStartRow.Value, _selectionEndRow.Value);
-        var endRow = Math.Max(_selectionStartRow.Value, _selectionEndRow.Value);
-        var startCol = Math.Min(_selectionStartCol.Value, _selectionEndCol.Value);
-        var endCol = Math.Max(_selectionStartCol.Value, _selectionEndCol.Value);
+        var topRow = Math.Min(_selectionStartRow.Value, _selectionEndRow.Value);
+        var bottomRow = Math.Max(_selectionStartRow.Value, _selectionEndRow.Value);
+        var colOnTopRow = _selectionStartRow.Value <= _selectionEndRow.Value ? _selectionStartCol.Value : _selectionEndCol.Value;
+        var colOnBottomRow = _selectionStartRow.Value <= _selectionEndRow.Value ? _selectionEndCol.Value : _selectionStartCol.Value;
 
         var selectedText = new System.Text.StringBuilder();
-        for (int lineIndex = startRow; lineIndex <= endRow; lineIndex++)
+        for (int lineIndex = topRow; lineIndex <= bottomRow; lineIndex++)
         {
             var line = _emulator.GetLine(lineIndex);
             if (line == null) continue;
             
             var lineText = new System.Text.StringBuilder();
             
-            // Determine column range for this line
+            // Determine column range for this line (same logic as IsCellSelected so copy matches highlight)
             int rowStartCol, rowEndCol;
-            if (lineIndex == startRow && lineIndex == endRow)
+            if (topRow == bottomRow)
             {
-                // Single line selection
-                rowStartCol = startCol;
-                rowEndCol = endCol;
+                rowStartCol = Math.Min(colOnTopRow, colOnBottomRow);
+                rowEndCol = Math.Max(colOnTopRow, colOnBottomRow);
             }
-            else if (lineIndex == startRow)
+            else if (lineIndex == topRow)
             {
-                // First line - from startCol to end of line
-                rowStartCol = startCol;
+                rowStartCol = colOnTopRow;
                 rowEndCol = line.Cells.Count;
             }
-            else if (lineIndex == endRow)
+            else if (lineIndex == bottomRow)
             {
-                // Last line - from start of line to endCol
                 rowStartCol = 0;
-                rowEndCol = endCol;
+                rowEndCol = colOnBottomRow;
             }
             else
             {
-                // Middle lines - entire line
                 rowStartCol = 0;
                 rowEndCol = line.Cells.Count;
             }
@@ -1916,9 +1918,7 @@ namespace TabbySSH.Views
             if (lineText.Length > 0)
             {
                 var lineStr = lineText.ToString();
-                // Only trim trailing spaces, not all whitespace
-                lineStr = lineStr.TrimEnd(' ');
-                if (lineIndex < endRow)
+                if (lineIndex < bottomRow)
                 {
                     selectedText.AppendLine(lineStr);
                 }
@@ -1927,7 +1927,7 @@ namespace TabbySSH.Views
                     selectedText.Append(lineStr);
                 }
             }
-            else if (lineIndex < endRow)
+            else if (lineIndex < bottomRow)
             {
                 selectedText.AppendLine();
             }
@@ -1937,7 +1937,7 @@ namespace TabbySSH.Views
         {
             try
             {
-                Clipboard.SetText(selectedText.ToString().TrimEnd());
+                Clipboard.SetText(selectedText.ToString());
             }
             catch
             {
@@ -1959,20 +1959,19 @@ namespace TabbySSH.Views
                 var text = Clipboard.GetText();
                 if (!string.IsNullOrEmpty(text))
                 {
+                    // Clear selection and redraw so any existing highlight is gone before new text appears
+                    ClearSelection();
+                    RenderScreen();
+                    
                     _lastInputSentTime = DateTime.Now;
                     
-                    // Wrap pasted text with bracketed paste sequences if mode is enabled
-                    string textToSend = text;
-                    if (_emulator != null && _emulator.BracketedPasteMode)
-                    {
-                        textToSend = "\x1B[200~" + text + "\x1B[201~";
-                    }
-                    
+                    // Send pasted text as raw characters (no bracketed paste wrappers) so the server echoes it
+                    // exactly like typed input with no special formatting/highlight
                     _ = Task.Run(async () =>
                     {
                         try
                         {
-                            await _connection.WriteAsync(textToSend);
+                            await _connection.WriteAsync(text);
                         }
                         catch
                         {

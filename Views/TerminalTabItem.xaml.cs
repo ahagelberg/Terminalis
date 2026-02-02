@@ -348,6 +348,12 @@ public partial class TerminalTabItem : TabItem
             return;
         }
         
+        // Don't initiate tab drag when user is over terminal content - let terminal handle selection
+        if (IsTerminalContent(source))
+        {
+            return;
+        }
+        
         _dragStartPoint = e.GetPosition(null);
         _isDragging = false;
     }
@@ -364,6 +370,12 @@ public partial class TerminalTabItem : TabItem
         if (IsScrollBarOrChild(source))
         {
             _isDragging = false;
+            return;
+        }
+        
+        // Don't start tab drag when user is dragging over terminal content - let terminal handle selection
+        if (IsTerminalContent(source))
+        {
             return;
         }
 
@@ -388,6 +400,19 @@ public partial class TerminalTabItem : TabItem
             if (element is System.Windows.Controls.Primitives.ScrollBar ||
                 element is System.Windows.Controls.Primitives.Thumb ||
                 element is System.Windows.Controls.Primitives.RepeatButton)
+            {
+                return true;
+            }
+            element = System.Windows.Media.VisualTreeHelper.GetParent(element);
+        }
+        return false;
+    }
+
+    private static bool IsTerminalContent(System.Windows.DependencyObject? element)
+    {
+        while (element != null)
+        {
+            if (element is TerminalEmulator)
             {
                 return true;
             }
