@@ -36,9 +36,12 @@ public class BoolToIntConverter : IValueConverter
 
 public partial class ConnectionDialog : Window
 {
+    private const int ScrollSyncThresholdPixels = 80;
+
     public SshSessionConfiguration? Configuration { get; private set; }
     public bool IsLiveEditMode { get; private set; }
     private Services.SessionManager? _sessionManager;
+    private bool _updatingSelectionFromScroll;
 
     public ConnectionDialog(Services.SessionManager? sessionManager = null)
     {
@@ -56,6 +59,7 @@ public partial class ConnectionDialog : Window
         {
             UpdateColorBoxes();
             LoadGatewaySessions();
+            SectionForwarding.SizeChanged += (_, _) => UpdateBottomSpacerHeight();
         };
     }
 
@@ -154,36 +158,17 @@ public partial class ConnectionDialog : Window
     
     private void HideConnectionFields()
     {
-        var connectionGroupBox = FindName("ConnectionGroupBox") as GroupBox;
-        if (connectionGroupBox != null)
-        {
-            connectionGroupBox.Visibility = Visibility.Collapsed;
-        }
-        
-        var authenticationGroupBox = FindName("AuthenticationGroupBox") as GroupBox;
-        if (authenticationGroupBox != null)
-        {
-            authenticationGroupBox.Visibility = Visibility.Collapsed;
-        }
-        
-        var connectionOptionsGroupBox = FindName("ConnectionOptionsGroupBox") as GroupBox;
-        if (connectionOptionsGroupBox != null)
-        {
-            var keepAliveGrid = FindName("KeepAliveGrid") as Grid;
-            if (keepAliveGrid != null) keepAliveGrid.Visibility = Visibility.Collapsed;
-            
-            var timeoutGrid = FindName("TimeoutGrid") as Grid;
-            if (timeoutGrid != null) timeoutGrid.Visibility = Visibility.Collapsed;
-            
-            var compressionCheckBox = FindName("CompressionCheckBox") as CheckBox;
-            if (compressionCheckBox != null) compressionCheckBox.Visibility = Visibility.Collapsed;
-        }
-        
-        var forwardingGroupBox = FindName("ForwardingGroupBox") as GroupBox;
-        if (forwardingGroupBox != null)
-        {
-            forwardingGroupBox.Visibility = Visibility.Collapsed;
-        }
+        SectionConnection.Visibility = Visibility.Collapsed;
+        SectionAuthentication.Visibility = Visibility.Collapsed;
+        SectionConnectionOptions.Visibility = Visibility.Collapsed;
+        SectionForwarding.Visibility = Visibility.Collapsed;
+
+        NavConnectionItem.Visibility = Visibility.Collapsed;
+        NavAuthenticationItem.Visibility = Visibility.Collapsed;
+        NavConnectionOptionsItem.Visibility = Visibility.Collapsed;
+        NavForwardingItem.Visibility = Visibility.Collapsed;
+
+        NavListBox.SelectedIndex = 2;
     }
 
     private SshSessionConfiguration? _existingConfig;
@@ -408,6 +393,89 @@ public partial class ConnectionDialog : Window
     {
         DialogResult = false;
         Close();
+    }
+
+    private void NavListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingSelectionFromScroll || NavListBox.SelectedItem is not ListBoxItem item || e.AddedItems.Count == 0)
+            return;
+
+        FrameworkElement? section = item switch
+        {
+            _ when item == NavConnectionItem => SectionConnection,
+            _ when item == NavAuthenticationItem => SectionAuthentication,
+            _ when item == NavTerminalAppearanceItem => SectionTerminalAppearance,
+            _ when item == NavTerminalBehaviourItem => SectionTerminalBehaviour,
+            _ when item == NavCompatibilityItem => SectionCompatibility,
+            _ when item == NavConnectionOptionsItem => SectionConnectionOptions,
+            _ when item == NavForwardingItem => SectionForwarding,
+            _ => null
+        };
+        if (section != null && section.Visibility == Visibility.Visible)
+            ScrollToSectionTop(section);
+    }
+
+    private void ScrollToSectionTop(FrameworkElement section)
+    {
+        var content = ContentScrollViewer.Content as Visual;
+        if (content == null)
+            return;
+
+        var transform = section.TransformToAncestor(content);
+        var point = transform.Transform(new Point(0, 0));
+        var offset = Math.Max(0, Math.Min(point.Y, ContentScrollViewer.ScrollableHeight));
+        ContentScrollViewer.ScrollToVerticalOffset(offset);
+    }
+
+    private void ContentScrollViewer_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdateBottomSpacerHeight();
+    }
+
+    private void UpdateBottomSpacerHeight()
+    {
+        var viewportHeight = ContentScrollViewer.ActualHeight - ContentScrollViewer.Padding.Top - ContentScrollViewer.Padding.Bottom;
+        var lastSectionTotalHeight = SectionForwarding.ActualHeight + SectionForwarding.Margin.Top + SectionForwarding.Margin.Bottom;
+        if (viewportHeight > 0)
+            BottomSpacer.Height = Math.Max(0, viewportHeight - lastSectionTotalHeight);
+    }
+
+    private void ContentScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (ContentScrollViewer.Content is not Visual content)
+            return;
+
+        var scrollOffset = ContentScrollViewer.VerticalOffset;
+        ListBoxItem? selectedNav = null;
+        var bestTop = double.NegativeInfinity;
+
+        void Consider(FrameworkElement section, ListBoxItem navItem)
+        {
+            if (section.Visibility != Visibility.Visible)
+                return;
+            var transform = section.TransformToAncestor(content);
+            var point = transform.Transform(new Point(0, 0));
+            if (point.Y <= scrollOffset + ScrollSyncThresholdPixels && point.Y > bestTop)
+            {
+                bestTop = point.Y;
+                selectedNav = navItem;
+            }
+        }
+
+        Consider(SectionConnection, NavConnectionItem);
+        Consider(SectionAuthentication, NavAuthenticationItem);
+        Consider(SectionTerminalAppearance, NavTerminalAppearanceItem);
+        Consider(SectionTerminalBehaviour, NavTerminalBehaviourItem);
+        Consider(SectionCompatibility, NavCompatibilityItem);
+        Consider(SectionConnectionOptions, NavConnectionOptionsItem);
+        Consider(SectionForwarding, NavForwardingItem);
+
+        if (selectedNav != null && NavListBox.SelectedItem != selectedNav)
+        {
+            _updatingSelectionFromScroll = true;
+            NavListBox.SelectedItem = selectedNav;
+            _updatingSelectionFromScroll = false;
+        }
     }
 
     private void TitleBar_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
