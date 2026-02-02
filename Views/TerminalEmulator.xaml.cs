@@ -258,6 +258,8 @@ namespace TabbySSH.Views
         if (string.IsNullOrWhiteSpace(fontFamily) || !installed.Contains(fontFamily))
             fontFamily = "Consolas";
         _typeface = new Typeface(new FontFamily(fontFamily), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+        _glyphTypeface = _typeface.TryGetGlyphTypeface(out var gt) ? gt : null;
+        _dpiCached = false;
         var formattedText = new FormattedText("M", System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight, _typeface, fontSize, Brushes.White, VisualTreeHelper.GetDpi(this).PixelsPerDip);
         _charWidth = formattedText.Width;
         _charHeight = formattedText.Height;
