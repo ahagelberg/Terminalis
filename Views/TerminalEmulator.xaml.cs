@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -129,14 +128,6 @@ namespace TabbySSH.Views
         _emulator.SetScrollbackLimit(DEFAULT_SCROLLBACK_LINES);
         _emulator.Bell += OnBell;
         _emulator.TitleChanged += OnTitleChanged;
-        
-#if DEBUG
-        _emulator.DebugCommandExecuted += OnDebugCommandExecuted;
-        if (_debugMode)
-        {
-            _emulator.DebugMode = true;
-        }
-#endif
 
         InitializeFont(fontFamily ?? "Consolas", fontSize ?? DEFAULT_FONT_SIZE);
 
@@ -177,42 +168,6 @@ namespace TabbySSH.Views
     private string _bellNotification = "Line Flash";
     private DispatcherTimer? _flashTimer;
     private DispatcherTimer? _lineFlashTimer;
-
-#if DEBUG
-    private bool _debugMode = false;
-    private DebugPanel? _debugPanel = null;
-
-    public bool DebugMode
-    {
-        get => _debugMode;
-        set
-        {
-            if (_debugMode != value)
-            {
-                _debugMode = value;
-                if (_emulator != null)
-                {
-                    _emulator.DebugMode = value;
-                }
-                UpdateDebugPanelVisibility();
-            }
-        }
-    }
-
-    private void UpdateDebugPanelVisibility()
-    {
-        if (_debugMode && _debugPanel == null && _emulator != null)
-        {
-            _debugPanel = new DebugPanel(_emulator);
-            // Add debug panel to UI - we'll integrate it into MainWindow
-        }
-        else if (!_debugMode && _debugPanel != null)
-        {
-            // Hide/remove debug panel
-            _debugPanel = null;
-        }
-    }
-#endif
 
     private void TerminalEmulator_Loaded(object sender, RoutedEventArgs e)
     {
@@ -524,43 +479,6 @@ namespace TabbySSH.Views
     private int _lastStartLineIndex = -1;
     private int _lastEndLineIndex = -1;
     private int _lastViewportOffset = 0;
-    
-#if DEBUG
-    private readonly Dictionary<string, (long totalTicks, int calls, long minTicks, long maxTicks)> _renderMetrics = new Dictionary<string, (long, int, long, long)>();
-    
-    private void RecordRenderMetric(string name, long ticks)
-    {
-        if (!_renderMetrics.ContainsKey(name))
-        {
-            _renderMetrics[name] = (0, 0, long.MaxValue, 0);
-        }
-        var (total, calls, min, max) = _renderMetrics[name];
-        _renderMetrics[name] = (total + ticks, calls + 1, Math.Min(min, ticks), Math.Max(max, ticks));
-    }
-    
-    public Dictionary<string, (double avgMs, double totalMs, int calls, double minMs, double maxMs)> GetRenderMetrics()
-    {
-        var result = new Dictionary<string, (double, double, int, double, double)>();
-        var frequency = Stopwatch.Frequency;
-        foreach (var kvp in _renderMetrics)
-        {
-            var (total, calls, min, max) = kvp.Value;
-            result[kvp.Key] = (
-                (total / (double)calls) * 1000.0 / frequency,
-                total * 1000.0 / frequency,
-                calls,
-                min * 1000.0 / frequency,
-                max * 1000.0 / frequency
-            );
-        }
-        return result;
-    }
-    
-    public void ResetRenderMetrics()
-    {
-        _renderMetrics.Clear();
-    }
-#endif
 
     public event EventHandler<string>? TitleChanged;
 
@@ -572,16 +490,6 @@ namespace TabbySSH.Views
             TitleChanged?.Invoke(this, title);
         }
     }
-
-#if DEBUG
-    private void OnDebugCommandExecuted(object? sender, Vt100Emulator.DebugCommandEventArgs e)
-    {
-        if (_debugPanel != null)
-        {
-            _debugPanel.AddCommandLog(e);
-        }
-    }
-#endif
 
     private void TerminalEmulator_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
@@ -798,9 +706,6 @@ namespace TabbySSH.Views
     // The buffer is only modified by server output via OnDataReceived -> _emulator.ProcessData()
     private void RenderScreen()
     {
-#if DEBUG
-        var totalStopwatch = Stopwatch.StartNew();
-#endif
         if (_emulator == null || _typeface == null)
         {
             return;
@@ -867,9 +772,6 @@ namespace TabbySSH.Views
         
         if (dirtyLines.Count > 0 || viewportChanged || _renderedLines.Count == 0)
         {
-#if DEBUG
-            var renderLinesStopwatch = Stopwatch.StartNew();
-#endif
             // Render dirty lines or all visible lines if viewport changed or initial render
             var linesToRender = (viewportChanged || _renderedLines.Count == 0) ? 
                 Enumerable.Range(startLineIndex, endLineIndex - startLineIndex).ToHashSet() : 
@@ -884,10 +786,6 @@ namespace TabbySSH.Views
             }
             
             _emulator.ClearDirtyLines();
-#if DEBUG
-            renderLinesStopwatch.Stop();
-            RecordRenderMetric("RenderScreen.RenderLines", renderLinesStopwatch.ElapsedTicks);
-#endif
         }
 
         // Update cursor
@@ -895,10 +793,6 @@ namespace TabbySSH.Views
 
         _previousCursorRow = currentCursorRow;
         _previousCursorCol = currentCursorCol;
-#if DEBUG
-        totalStopwatch.Stop();
-        RecordRenderMetric("RenderScreen.Total", totalStopwatch.ElapsedTicks);
-#endif
     }
 
     private void HandleViewportChange(int startLineIndex, int endLineIndex, int viewportOffset, int visibleRows)
@@ -1019,9 +913,6 @@ namespace TabbySSH.Views
     // Read-only: only reads from buffer, never modifies it
     private void RenderLine(DrawingContext dc, int lineIndex, int viewportRow)
     {
-#if DEBUG
-        var lineStopwatch = Stopwatch.StartNew();
-#endif
         if (_emulator == null || _typeface == null)
         {
             return;
@@ -1032,13 +923,6 @@ namespace TabbySSH.Views
         {
             return;
         }
-#if DEBUG
-        var getLineStopwatch = Stopwatch.StartNew();
-#endif
-#if DEBUG
-        getLineStopwatch.Stop();
-        RecordRenderMetric("RenderLine.GetLine", getLineStopwatch.ElapsedTicks);
-#endif
 
         // When called from RenderLineIncremental, the DrawingVisual is positioned on the Canvas,
         // so we draw at y=0 relative to the DrawingVisual. viewportRow is only used for
@@ -1057,10 +941,7 @@ namespace TabbySSH.Views
         // Cache Cells collection reference to avoid repeated property access
         var cells = line.Cells;
         var maxCol = Math.Min(cells.Count, visibleCols);
-        
-#if DEBUG
-        var bgPassStopwatch = Stopwatch.StartNew();
-#endif
+
         // First pass: draw all background rectangles (batch by color)
         var currentBg = -1;
         var bgStartCol = 0;
@@ -1090,11 +971,7 @@ namespace TabbySSH.Views
             var bgRect = new Rect(bgStartCol * _charWidth, y, bgWidth, _charHeight);
             dc.DrawRectangle(bgBrush, null, bgRect);
         }
-#if DEBUG
-        bgPassStopwatch.Stop();
-        RecordRenderMetric("RenderLine.BackgroundPass", bgPassStopwatch.ElapsedTicks);
-#endif
-        
+
         // Second pass: draw text segments (only break on foreground/style changes, not background)
         var currentFg = -1;
         currentBg = -1;
@@ -1110,19 +987,10 @@ namespace TabbySSH.Views
         _textRunBuilder.Clear();
         var textRunStartCol = 0;
 
-#if DEBUG
-        var loopStopwatch = Stopwatch.StartNew();
-#endif
         // Render only cells that fit in the viewport (truncate long lines)
         for (int col = 0; col < maxCol; col++)
         {
             var cell = cells[col];
-#if DEBUG
-            if (col == 0)
-            {
-                loopStopwatch.Restart();
-            }
-#endif
 
             var fg = cell.Reverse ? cell.BackgroundColor : cell.ForegroundColor;
             var bg = cell.Reverse ? cell.ForegroundColor : cell.BackgroundColor;
@@ -1173,13 +1041,6 @@ namespace TabbySSH.Views
             }
         }
 
-#if DEBUG
-        loopStopwatch.Stop();
-        if (maxCol > 0)
-        {
-            RecordRenderMetric("RenderLine.CellLoop", loopStopwatch.ElapsedTicks);
-        }
-#endif
         // Render any remaining textRun
         if (_textRunBuilder.Length > 0)
         {
@@ -1187,10 +1048,6 @@ namespace TabbySSH.Views
             RenderTextSegment(dc, x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, lineIndex);
             _textRunBuilder.Clear();
         }
-#if DEBUG
-        lineStopwatch.Stop();
-        RecordRenderMetric("RenderLine.Total", lineStopwatch.ElapsedTicks);
-#endif
     }
 
     private bool IsCellSelected(int lineIndex, int col)
@@ -1232,16 +1089,10 @@ namespace TabbySSH.Views
     // Read-only: only reads from buffer for selection state, never modifies buffer
     private void RenderTextSegment(DrawingContext dc, double x, double y, string text, int fgColor, int bgColor, bool bold, bool italic, bool underline, bool faint, bool crossedOut, bool doubleUnderline, bool overline, bool conceal, int startCol, int lineIndex)
     {
-#if DEBUG
-        var segmentStopwatch = Stopwatch.StartNew();
-#endif
         if (_typeface == null || string.IsNullOrEmpty(text))
         {
             return;
         }
-#if DEBUG
-        var getColorStopwatch = Stopwatch.StartNew();
-#endif
 
         if (x < 0 || y < 0 || x + text.Length * _charWidth > TerminalCanvas.Width)
         {
@@ -1250,15 +1101,8 @@ namespace TabbySSH.Views
         
         var foreground = GetColor(fgColor);
         var background = GetColor(bgColor);
-#if DEBUG
-        getColorStopwatch.Stop();
-        RecordRenderMetric("RenderTextSegment.GetColor", getColorStopwatch.ElapsedTicks);
-#endif
         var fontWeight = bold ? FontWeights.Bold : FontWeights.Normal;
         var fontStyle = italic ? FontStyles.Italic : FontStyles.Normal;
-#if DEBUG
-        var selectionCheckStopwatch = Stopwatch.StartNew();
-#endif
 
         // Check if this text segment crosses selection boundary - only split if necessary
         if ((_hasSelection || _isSelecting) && text.Length > 1)
@@ -1275,11 +1119,7 @@ namespace TabbySSH.Views
                     break;
                 }
             }
-#if DEBUG
-        selectionCheckStopwatch.Stop();
-        RecordRenderMetric("RenderTextSegment.SelectionCheck", selectionCheckStopwatch.ElapsedTicks);
-#endif
-            
+
             // If all characters have same selection state, render normally
             if (!needsSplit)
             {
@@ -1394,9 +1234,6 @@ namespace TabbySSH.Views
             foreground = faintBrush;
         }
 
-#if DEBUG
-        var createElementsStopwatch = Stopwatch.StartNew();
-#endif
         // Background is drawn separately in first pass, skip it here (unless we need per-character backgrounds for selection)
 
         // Use GlyphRun for faster rendering if available, otherwise fall back to FormattedText
@@ -1499,14 +1336,6 @@ namespace TabbySSH.Views
             var underlineRect = new Rect(x, y + _charHeight - 3, text.Length * _charWidth, 1);
             dc.DrawRectangle(foreground, null, underlineRect);
         }
-#if DEBUG
-        createElementsStopwatch.Stop();
-        RecordRenderMetric("RenderTextSegment.CreateElements", createElementsStopwatch.ElapsedTicks);
-#endif
-#if DEBUG
-        segmentStopwatch.Stop();
-        RecordRenderMetric("RenderTextSegment.Total", segmentStopwatch.ElapsedTicks);
-#endif
     }
 
     private int GetLineIndexAtViewportRow(int viewportRow)

@@ -60,13 +60,6 @@ public partial class MainWindow : Window
         Activated += MainWindow_Activated;
         
         LoadWindowState();
-        
-#if DEBUG
-        DebugModeMenuItem.Visibility = Visibility.Visible;
-        UpdateDebugMenuState();
-        // Initialize debug panel to be hidden on startup
-        UpdateDebugPanel();
-#endif
     }
 
     private void MainWindow_StateChanged(object? sender, EventArgs e)
@@ -634,115 +627,6 @@ public partial class MainWindow : Window
         Close();
     }
 
-#if DEBUG
-    private Views.DebugPanel? _currentDebugPanel = null;
-
-    private void DebugModeMenuItem_Click(object sender, RoutedEventArgs e)
-    {
-        if (TerminalTabs.SelectedItem is TerminalTabItem tab)
-        {
-            var terminal = tab.Terminal;
-            if (terminal != null)
-            {
-                terminal.DebugMode = !terminal.DebugMode;
-                UpdateDebugMenuState();
-                UpdateDebugPanel();
-                
-                StatusTextBlock.Text = terminal.DebugMode ? "Debug mode enabled" : "Debug mode disabled";
-            }
-        }
-    }
-
-    private void UpdateDebugMenuState()
-    {
-        if (TerminalTabs.SelectedItem is TerminalTabItem tab)
-        {
-            var terminal = tab.Terminal;
-            if (DebugModeMenuItem != null)
-            {
-                DebugModeMenuItem.IsChecked = terminal?.DebugMode ?? false;
-            }
-        }
-    }
-
-    private void UpdateDebugPanel()
-    {
-#if DEBUG
-        // Get the Grid that contains the debug panel
-        var terminalGrid = TerminalTabs.Parent as Grid;
-        if (terminalGrid == null) return;
-        
-        // Get the column definitions
-        var debugSplitterColumn = terminalGrid.ColumnDefinitions[1];
-        var debugPanelColumn = terminalGrid.ColumnDefinitions[2];
-        
-        if (TerminalTabs.SelectedItem is TerminalTabItem tab)
-        {
-            var terminal = tab.Terminal;
-            if (terminal != null && terminal.DebugMode && terminal._emulator != null)
-            {
-                if (_currentDebugPanel == null)
-                {
-                    _currentDebugPanel = new Views.DebugPanel(terminal._emulator, terminal);
-                    DebugPanelContainer.Content = _currentDebugPanel;
-                }
-                DebugPanelContainer.Visibility = Visibility.Visible;
-                DebugPanelSplitter.Visibility = Visibility.Visible;
-                // Restore column widths and constraints
-                debugSplitterColumn.Width = new GridLength(5);
-                debugPanelColumn.Width = new GridLength(400, GridUnitType.Pixel);
-                debugPanelColumn.MinWidth = 300;
-                debugPanelColumn.MaxWidth = 600;
-            }
-            else
-            {
-                DebugPanelContainer.Visibility = Visibility.Collapsed;
-                DebugPanelSplitter.Visibility = Visibility.Collapsed;
-                // Set column widths to 0 and remove MinWidth constraint to hide the panel completely
-                debugSplitterColumn.Width = new GridLength(0);
-                debugPanelColumn.Width = new GridLength(0);
-                debugPanelColumn.MinWidth = 0;
-                debugPanelColumn.MaxWidth = 0;
-                if (_currentDebugPanel != null)
-                {
-                    DebugPanelContainer.Content = null;
-                    _currentDebugPanel = null;
-                }
-            }
-        }
-        else
-        {
-            DebugPanelContainer.Visibility = Visibility.Collapsed;
-            DebugPanelSplitter.Visibility = Visibility.Collapsed;
-            // Set column widths to 0 and remove MinWidth constraint to hide the panel completely
-            debugSplitterColumn.Width = new GridLength(0);
-            debugPanelColumn.Width = new GridLength(0);
-            debugPanelColumn.MinWidth = 0;
-            debugPanelColumn.MaxWidth = 0;
-            if (_currentDebugPanel != null)
-            {
-                DebugPanelContainer.Content = null;
-                _currentDebugPanel = null;
-            }
-        }
-        
-        // Update terminal size after debug panel visibility changes
-        // This is a programmatic resize (not user resizing), so send immediately
-        if (TerminalTabs.SelectedItem is TerminalTabItem selectedTab)
-        {
-            var selectedTerminal = selectedTab.Terminal;
-            if (selectedTerminal != null)
-            {
-                // Force a size update to account for debug panel
-                selectedTerminal.UpdateTerminalSize();
-                // Send immediately for programmatic resize (debug panel visibility change)
-                selectedTerminal.SendTerminalSizeToServer(force: true);
-            }
-        }
-#endif
-    }
-#endif
-
     private async void TerminalTabs_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (TerminalTabs.SelectedItem is TerminalTabItem tab && tab.Connection != null)
@@ -782,13 +666,8 @@ public partial class MainWindow : Window
         }
         
         UpdateTitleBarColor();
-        
-#if DEBUG
-        UpdateDebugMenuState();
-        UpdateDebugPanel();
-#endif
     }
-    
+
     private void UpdateTitleBarColor()
     {
         TitleBarBorder.Background = Application.Current.Resources["MenuBackground"] as SolidColorBrush;

@@ -1,4 +1,4 @@
-﻿using System.Data;
+using System.Data;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
@@ -8,26 +8,8 @@ using TabbySSH.Services;
 
 namespace TabbySSH;
 
-/// <summary>
-/// Interaction logic for App.xaml
-/// </summary>
 public partial class App : Application
 {
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool AllocConsole();
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GetStdHandle(int nStdHandle);
-
     [DllImport("shcore.dll")]
     private static extern int SetProcessDpiAwareness(ProcessDpiAwareness value);
 
@@ -37,10 +19,6 @@ public partial class App : Application
         ProcessSystemDpiAware = 1,
         ProcessPerMonitorDpiAware = 2
     }
-
-    private const int STD_OUTPUT_HANDLE = -11;
-    private const uint ENABLE_PROCESSED_OUTPUT = 0x0001;
-    private const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
 
     static App()
     {
@@ -59,36 +37,6 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-#if DEBUG
-        AllocConsole();
-        var handle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (handle != IntPtr.Zero)
-        {
-            if (GetConsoleMode(handle, out uint mode))
-            {
-                mode |= ENABLE_PROCESSED_OUTPUT;
-                SetConsoleMode(handle, mode);
-            }
-        }
-        System.Console.WriteLine("Debug console allocated. Debug output will appear here.");
-        System.Console.WriteLine("================================================");
-        
-        AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
-        {
-            System.Console.WriteLine($"Unhandled exception: {args.ExceptionObject}");
-            if (args.ExceptionObject is Exception ex)
-            {
-                System.Console.WriteLine($"Stack trace: {ex.StackTrace}");
-            }
-        };
-        
-        DispatcherUnhandledException += (sender, args) =>
-        {
-            System.Console.WriteLine($"Dispatcher unhandled exception: {args.Exception}");
-            System.Console.WriteLine($"Stack trace: {args.Exception.StackTrace}");
-            args.Handled = false;
-        };
-#endif
         ThemeManager = new ThemeManager();
         
         var configManager = new Services.ConfigurationManager();

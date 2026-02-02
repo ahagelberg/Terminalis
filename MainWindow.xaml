@@ -47,8 +47,6 @@
             <MenuItem Header="_View">
                 <MenuItem Header="_Next Tab" x:Name="NextTabMenuItem" Click="NextTabMenuItem_Click" InputGestureText="Ctrl+Tab"/>
                 <MenuItem Header="_Previous Tab" x:Name="PreviousTabMenuItem" Click="PreviousTabMenuItem_Click" InputGestureText="Ctrl+Shift+Tab"/>
-                <Separator/>
-                <MenuItem Header="_Debug Mode" x:Name="DebugModeMenuItem" IsCheckable="True" Click="DebugModeMenuItem_Click" Visibility="Collapsed"/>
             </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="_About..." x:Name="AboutMenuItem" Click="AboutMenuItem_Click"/>
@@ -103,24 +101,12 @@
                       HorizontalAlignment="Stretch" Background="{DynamicResource GridSplitterBackground}"
                       ResizeBehavior="PreviousAndNext"/>
 
-        <Grid Grid.Row="1" Grid.Column="2">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="5"/>
-                <ColumnDefinition Width="400" MinWidth="300" MaxWidth="600"/>
-            </Grid.ColumnDefinitions>
-            <TabControl x:Name="TerminalTabs" Grid.Column="0"
-                        SelectionChanged="TerminalTabs_SelectionChanged"
-                        AllowDrop="True"
-                        DragOver="TerminalTabs_DragOver"
-                        Drop="TerminalTabs_Drop"
-                        DragLeave="TerminalTabs_DragLeave"/>
-            <GridSplitter x:Name="DebugPanelSplitter" Grid.Column="1" Width="5" 
-                          HorizontalAlignment="Stretch" Background="{DynamicResource GridSplitterBackground}"
-                          ResizeBehavior="PreviousAndNext"
-                          Visibility="Collapsed"/>
-            <ContentControl x:Name="DebugPanelContainer" Grid.Column="2" Visibility="Collapsed"/>
-        </Grid>
+        <TabControl x:Name="TerminalTabs" Grid.Row="1" Grid.Column="2"
+                    SelectionChanged="TerminalTabs_SelectionChanged"
+                    AllowDrop="True"
+                    DragOver="TerminalTabs_DragOver"
+                    Drop="TerminalTabs_Drop"
+                    DragLeave="TerminalTabs_DragLeave"/>
 
         <StatusBar Grid.Row="2" Grid.ColumnSpan="3" Background="{DynamicResource StatusBarBackground}" Foreground="{DynamicResource StatusBarForeground}">
             <StatusBarItem>

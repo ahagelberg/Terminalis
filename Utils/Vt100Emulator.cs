@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Text;
 using System.Linq;
 
@@ -84,53 +83,6 @@ public class Vt100Emulator
     private int _scrollRegionTop = -1; // -1 means no scrolling region (entire screen scrolls)
     private int _scrollRegionBottom = -1; // -1 means no scrolling region (entire screen scrolls)
 
-#if DEBUG
-    private readonly Dictionary<string, PerformanceMetric> _performanceMetrics = new();
-    
-    private class PerformanceMetric
-    {
-        public long TotalTicks { get; set; }
-        public long CallCount { get; set; }
-        public long MinTicks { get; set; } = long.MaxValue;
-        public long MaxTicks { get; set; }
-        
-        public double AverageMs => CallCount > 0 ? (TotalTicks / (double)TimeSpan.TicksPerMillisecond) / CallCount : 0;
-        public double TotalMs => TotalTicks / (double)TimeSpan.TicksPerMillisecond;
-    }
-    
-    public Dictionary<string, (double avgMs, double totalMs, long calls, double minMs, double maxMs)> GetPerformanceMetrics()
-    {
-        return _performanceMetrics.ToDictionary(
-            kvp => kvp.Key,
-            kvp => (
-                kvp.Value.AverageMs,
-                kvp.Value.TotalMs,
-                kvp.Value.CallCount,
-                kvp.Value.MinTicks / (double)TimeSpan.TicksPerMillisecond,
-                kvp.Value.MaxTicks / (double)TimeSpan.TicksPerMillisecond
-            )
-        );
-    }
-    
-    public void ResetPerformanceMetrics()
-    {
-        _performanceMetrics.Clear();
-    }
-    
-    private void RecordPerformance(string operation, long ticks)
-    {
-        if (!_performanceMetrics.ContainsKey(operation))
-        {
-            _performanceMetrics[operation] = new PerformanceMetric();
-        }
-        var metric = _performanceMetrics[operation];
-        metric.TotalTicks += ticks;
-        metric.CallCount++;
-        if (ticks < metric.MinTicks) metric.MinTicks = ticks;
-        if (ticks > metric.MaxTicks) metric.MaxTicks = ticks;
-    }
-#endif
-
     public int Rows => _rows;
     public int Cols => _cols;
     public int LineCount => _lines.Count;
@@ -143,52 +95,9 @@ public class Vt100Emulator
     public int CursorRow => _currentLineIndex >= 0 ? _currentLineIndex : 0;
     public int CursorCol => _writeCol;
     public int ScrollbackLineCount => 0;
-    
-#if DEBUG
-    public TerminalModes Modes => new TerminalModes
-    {
-        InAlternateScreen = _inAlternateScreen,
-        CursorKeyMode = _cursorKeyMode,
-        InsertMode = _insertMode,
-        AutoWrapMode = _autoWrapMode,
-        CursorVisible = _cursorVisible,
-        BracketedPasteMode = _bracketedPasteMode,
-        ScrollRegionTop = _scrollRegionTop,
-        ScrollRegionBottom = _scrollRegionBottom
-    };
-    
-    public void SetMode(string modeName, bool value)
-    {
-        // Stub implementation for debug panel
-    }
-    
-    public void SendAnsiCode(string code)
-    {
-        // Stub implementation for debug panel
-    }
-#endif
 
     public event EventHandler? Bell;
     public event EventHandler<string>? TitleChanged;
-
-#if DEBUG
-    public bool DebugMode { get; set; }
-    public event EventHandler<DebugCommandEventArgs>? DebugCommandExecuted;
-    
-    public class DebugCommandEventArgs : EventArgs
-    {
-        public string CommandType { get; set; } = string.Empty;
-        public string Parameters { get; set; } = string.Empty;
-        public string ResultingState { get; set; } = string.Empty;
-        public string RawText { get; set; } = string.Empty;
-        public string CommandInterpretation { get; set; } = string.Empty;
-        public int CursorRowBefore { get; set; }
-        public int CursorColBefore { get; set; }
-        public int CursorRowAfter { get; set; }
-        public int CursorColAfter { get; set; }
-        public DateTime Timestamp { get; set; } = DateTime.Now;
-    }
-#endif
 
     public Vt100Emulator()
     {
@@ -205,39 +114,9 @@ public class Vt100Emulator
 
     public void ProcessData(string data)
     {
-#if DEBUG
-        var stopwatch = Stopwatch.StartNew();
-#endif
-        
-#if DEBUG
-        // Log raw data received from server (only for small chunks to avoid performance issues)
-        if (DebugMode && !string.IsNullOrEmpty(data) && data.Length <= 100)
-        {
-            var escapedData = AnsiParser.EscapeString(data);
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "Raw Data",
-                Parameters = $"length={data.Length} bytes",
-                ResultingState = $"raw data received from server",
-                RawText = data,
-                CommandInterpretation = $"Raw server output: {escapedData}",
-                CursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0,
-                CursorColBefore = _writeCol,
-                CursorRowAfter = _currentLineIndex >= 0 ? _currentLineIndex : 0,
-                CursorColAfter = _writeCol
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
-        
         // Process data in order as it arrives - no batching, no reordering
         // This ensures commands and text are processed in the exact order they appear
         _ansiParser.ProcessData(data);
-        
-#if DEBUG
-        stopwatch.Stop();
-        RecordPerformance("ProcessData", stopwatch.ElapsedTicks);
-#endif
     }
 
     public TerminalLine? GetLine(int lineIndex)
@@ -326,10 +205,6 @@ public class Vt100Emulator
 
     private void OnAnsiCommand(object? sender, AnsiCommand command)
     {
-#if DEBUG
-        var stopwatch = Stopwatch.StartNew();
-#endif
-        
         // Flush any pending text batch before processing command
         // This ensures text is processed before the command that follows it
         FlushTextBatch();
@@ -348,21 +223,8 @@ public class Vt100Emulator
         }
         else
         {
-            // Warn about unhandled ANSI commands
-            string commandDesc = command.Type switch
-            {
-                AnsiCommandType.SingleChar => $"SingleChar escape: ESC{command.FinalChar}",
-                AnsiCommandType.Dcs => "DCS (Device Control String)",
-                _ => $"Unknown command type: {command.Type}"
-            };
-            Debug.WriteLine($"[Vt100Emulator] ***Unhandled ANSI command: {commandDesc}");
-            // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled ANSI command: {commandDesc}");
+            // Unhandled ANSI command - ignore
         }
-        
-#if DEBUG
-        stopwatch.Stop();
-        RecordPerformance("OnAnsiCommand", stopwatch.ElapsedTicks);
-#endif
     }
 
     private void ProcessOscCommand(AnsiCommand command)
@@ -390,16 +252,12 @@ public class Vt100Emulator
                     {
                         string title = parts[1];
                         _currentTitle = title;
-                        Debug.WriteLine($"[Vt100Emulator] Handled OSC command: ESC]{oscCode};{title} (Set window title)");
-                        // System.Console.WriteLine($"[Vt100Emulator] Handled OSC command: ESC]{oscCode};{title} (Set window title)");
                         TitleChanged?.Invoke(this, title);
                     }
                 }
                 break;
             default:
                 // Other OSC commands not implemented yet
-                Debug.WriteLine($"[Vt100Emulator] ***Unhandled OSC command: {oscString} (code: {oscCode})");
-                // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled OSC command: {oscString} (code: {oscCode})");
                 break;
         }
     }
@@ -422,9 +280,6 @@ public class Vt100Emulator
                 // Private mode changes (DEC modes) - ESC [ ? ... h/l
                 var paramStr = p.Count > 0 ? string.Join(";", p) : "";
                 var commandStr = $"\x1B[?{paramStr}{final}";
-                var escapedStr = AnsiParser.EscapeString(commandStr);
-                Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (DEC Mode change: mode={p[0]}, set={final == 'h'})");
-                // System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (DEC Mode change: mode={p[0]}, set={final == 'h'})");
                 ProcessDecModeChange(p[0], final == 'h');
             }
             else
@@ -432,9 +287,6 @@ public class Vt100Emulator
                 // Non-private mode changes (ANSI modes) - ESC [ ... h/l
                 var paramStr = p.Count > 0 ? string.Join(";", p) : "";
                 var commandStr = $"\x1B[{paramStr}{final}";
-                var escapedStr = AnsiParser.EscapeString(commandStr);
-                Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (ANSI Mode change: mode={p[0]}, set={final == 'h'})");
-                // System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (ANSI Mode change: mode={p[0]}, set={final == 'h'})");
                 ProcessAnsiModeChange(p[0], final == 'h');
             }
         }
@@ -444,8 +296,6 @@ public class Vt100Emulator
             var paramStr = p.Count > 0 ? string.Join(";", p) : "";
             var commandStr = $"\x1B[{paramStr}J";
             var escapedStr = AnsiParser.EscapeString(commandStr);
-            Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Display)");
-            // System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Display)");
             ProcessEraseInDisplay(p);
         }
         // Process Erase in Line (K) command
@@ -454,8 +304,6 @@ public class Vt100Emulator
             var paramStr = p.Count > 0 ? string.Join(";", p) : "";
             var commandStr = $"\x1B[{paramStr}K";
             var escapedStr = AnsiParser.EscapeString(commandStr);
-            Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Line)");
-            // System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Erase in Line)");
             ProcessEraseInLine(p);
         }
         // Process Window Manipulation (t) commands
@@ -464,8 +312,6 @@ public class Vt100Emulator
             var paramStr = p.Count > 0 ? string.Join(";", p) : "";
             var commandStr = $"\x1B[{paramStr}t";
             var escapedStr = AnsiParser.EscapeString(commandStr);
-            Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Window Manipulation)");
-            // System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Window Manipulation)");
             ProcessWindowManipulation(p);
         }
         // Process Set Scrolling Region (r) command
@@ -474,8 +320,6 @@ public class Vt100Emulator
             var paramStr = p.Count > 0 ? string.Join(";", p) : "";
             var commandStr = $"\x1B[{paramStr}r";
             var escapedStr = AnsiParser.EscapeString(commandStr);
-            Debug.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Set Scrolling Region)");
-            // System.Console.WriteLine($"[Vt100Emulator] Handled CSI command: {escapedStr} (Set Scrolling Region)");
             ProcessSetScrollingRegion(p);
         }
         // Process Cursor Position (H or f) command
@@ -560,8 +404,6 @@ public class Vt100Emulator
             var isPrivate = command.IsPrivate ? "?" : "";
             var commandStr = $"\x1B[{isPrivate}{paramStr}{final}";
             var escapedStr = AnsiParser.EscapeString(commandStr);
-            Debug.WriteLine($"[Vt100Emulator] ***Unhandled CSI command: {escapedStr} (final char: '{final}' (0x{(int)final:X2}), params: [{paramStr}])");
-            // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled CSI command: {escapedStr} (final char: '{final}' (0x{(int)final:X2}), params: [{paramStr}])");
         }
     }
 
@@ -574,23 +416,17 @@ public class Vt100Emulator
                 // When enabled (set=true): cursor keys send ESC [ A/B/C/D (cursor mode)
                 // When disabled (set=false): cursor keys send ESC O A/B/C/D (application mode - default)
                 _cursorKeyMode = set;
-#if DEBUG
-                Debug.WriteLine($"[Vt100Emulator] Cursor Key Mode (DECCKM): {(set ? "cursor mode (ESC [)" : "application mode (ESC O)")}");
-#endif
                 break;
             case 12:
                 // DECSCLM - Start Blinking Cursor (DEC Smooth Cursor Line Mode)
                 // This mode controls cursor blinking behavior
                 // We track it but don't need to do anything special - cursor visibility is handled by mode 25
-                Debug.WriteLine($"[Vt100Emulator] Start Blinking Cursor (DECSCLM): {(set ? "enabled" : "disabled")}");
                 break;
             case 25:
                 // DECTCEM - DEC Text Cursor Enable Mode
                 // When enabled (set=true): cursor is visible
                 // When disabled (set=false): cursor is hidden
                 _cursorVisible = set;
-                // Don't fire events - ScreenChanged will be fired at end of ProcessData
-                Debug.WriteLine($"[Vt100Emulator] Cursor Visibility (DECTCEM): {(set ? "visible" : "hidden")}");
                 break;
             case 1049:
                 // DECALTB - Alternate Screen Buffer
@@ -605,20 +441,14 @@ public class Vt100Emulator
                 {
                     RestoreMainScreenState();
                 }
-                Debug.WriteLine($"[Vt100Emulator] Alternate Screen Buffer (DECALTB): {(set ? "enabled" : "disabled")}");
-                // System.Console.WriteLine($"[Vt100Emulator] Alternate Screen Buffer (DECALTB): {(set ? "enabled" : "disabled")}");
                 break;
             case 2004:
                 // Bracketed paste mode
                 // When enabled (set=true), pasted text should be wrapped with \x1B[200~ and \x1B[201~
                 // When disabled (set=false), pasted text is sent as-is
                 _bracketedPasteMode = set;
-                Debug.WriteLine($"[Vt100Emulator] Bracketed paste mode: {(set ? "enabled" : "disabled")}");
                 break;
             default:
-                // Other DEC mode changes not implemented yet
-                Debug.WriteLine($"[Vt100Emulator] ***Unhandled DEC mode change: mode={mode}, set={set}");
-                // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled DEC mode change: mode={mode}, set={set}");
                 break;
         }
     }
@@ -632,13 +462,8 @@ public class Vt100Emulator
                 // When enabled (set=true): Insert Mode - new characters shift existing characters to the right
                 // When disabled (set=false): Replace Mode - new characters overwrite existing characters (default)
                 _insertMode = set;
-                Debug.WriteLine($"[Vt100Emulator] Insert/Replace Mode (IRM): {(set ? "Insert Mode (characters shift right)" : "Replace Mode (characters overwrite)")}");
-                // System.Console.WriteLine($"[Vt100Emulator] Insert/Replace Mode (IRM): {(set ? "Insert Mode (characters shift right)" : "Replace Mode (characters overwrite)")}");
                 break;
             default:
-                // Other ANSI mode changes not implemented yet
-                Debug.WriteLine($"[Vt100Emulator] ***Unhandled ANSI mode change: mode={mode}, set={set}");
-                // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled ANSI mode change: mode={mode}, set={set}");
                 break;
         }
     }
@@ -646,17 +471,6 @@ public class Vt100Emulator
     private void ProcessEraseInDisplay(List<int> parameters)
     {
         int param = parameters.Count > 0 ? parameters[0] : 0;
-        
-        string operation = param switch
-        {
-            0 => "Erase from cursor to end of screen",
-            1 => "Erase from cursor to beginning of screen",
-            2 => "Erase entire screen",
-            3 => "Erase entire screen and scrollback buffer",
-            _ => $"Unknown erase operation (param={param})"
-        };
-        Debug.WriteLine($"[Vt100Emulator] Erase in Display: {operation}");
-        // System.Console.WriteLine($"[Vt100Emulator] Erase in Display: {operation}");
         
         if (param == 0)
         {
@@ -689,20 +503,8 @@ public class Vt100Emulator
         
         if (_currentLineIndex < 0 || _currentLineIndex >= _lines.Count)
         {
-            Debug.WriteLine($"[Vt100Emulator] Erase in Line: Invalid line index ({_currentLineIndex}), ignoring");
-            // System.Console.WriteLine($"[Vt100Emulator] Erase in Line: Invalid line index ({_currentLineIndex}), ignoring");
             return;
         }
-        
-        string operation = param switch
-        {
-            0 => "Erase from cursor to end of line",
-            1 => "Erase from cursor to beginning of line",
-            2 => "Erase entire line",
-            _ => $"Unknown erase operation (param={param})"
-        };
-        Debug.WriteLine($"[Vt100Emulator] Erase in Line: {operation}");
-        // System.Console.WriteLine($"[Vt100Emulator] Erase in Line: {operation}");
         
         var line = _lines[_currentLineIndex];
         
@@ -813,9 +615,6 @@ public class Vt100Emulator
 
     private void CopyLineCells(TerminalLine source, TerminalLine destination)
     {
-#if DEBUG
-        var stopwatch = Stopwatch.StartNew();
-#endif
         destination.Cells.Clear();
         foreach (var cell in source.Cells)
         {
@@ -837,10 +636,6 @@ public class Vt100Emulator
             });
         }
         MarkLineDirty(destination);
-#if DEBUG
-        stopwatch.Stop();
-        RecordPerformance("CopyLineCells", stopwatch.ElapsedTicks);
-#endif
     }
 
     private void EraseFromCursorToBeginningOfLine(TerminalLine line)
@@ -884,8 +679,6 @@ public class Vt100Emulator
                 // Save window title (xterm extension)
                 // Save the current title so it can be restored later with operation 23
                 _savedTitle = _currentTitle;
-                Debug.WriteLine($"[Vt100Emulator] Window title saved: \"{_savedTitle ?? "(null)"}\"");
-                // System.Console.WriteLine($"[Vt100Emulator] Window title saved: \"{_savedTitle ?? "(null)"}\"");
                 break;
             case 23:
                 // Restore window title (xterm extension)
@@ -894,21 +687,9 @@ public class Vt100Emulator
                 {
                     _currentTitle = _savedTitle;
                     TitleChanged?.Invoke(this, _savedTitle);
-                    Debug.WriteLine($"[Vt100Emulator] Window title restored: \"{_savedTitle}\"");
-                    // System.Console.WriteLine($"[Vt100Emulator] Window title restored: \"{_savedTitle}\"");
-                }
-                else
-                {
-                    Debug.WriteLine($"[Vt100Emulator] Window title restore requested but no title was saved");
-                    // System.Console.WriteLine($"[Vt100Emulator] Window title restore requested but no title was saved");
                 }
                 break;
             default:
-                // Other window manipulation operations not implemented
-                // Most window manipulation (move, resize, maximize) doesn't apply to client-side terminals
-                var paramStr = parameters.Count > 0 ? string.Join(";", parameters) : "";
-                Debug.WriteLine($"[Vt100Emulator] ***Unhandled window manipulation: operation={operation}, params=[{paramStr}]");
-                // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled window manipulation: operation={operation}, params=[{paramStr}]");
                 break;
         }
     }
@@ -923,8 +704,6 @@ public class Vt100Emulator
             // Reset scrolling region to full screen
             _scrollRegionTop = -1;
             _scrollRegionBottom = -1;
-            Debug.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen");
-            // System.Console.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen");
         }
         else if (parameters.Count >= 2)
         {
@@ -937,25 +716,17 @@ public class Vt100Emulator
             {
                 _scrollRegionTop = top;
                 _scrollRegionBottom = bottom;
-                Debug.WriteLine($"[Vt100Emulator] Scrolling region set: lines {top + 1}-{bottom + 1} (0-based: {top}-{bottom})");
-                // System.Console.WriteLine($"[Vt100Emulator] Scrolling region set: lines {top + 1}-{bottom + 1} (0-based: {top}-{bottom})");
             }
             else
             {
-                // Invalid parameters, reset to full screen
                 _scrollRegionTop = -1;
                 _scrollRegionBottom = -1;
-                Debug.WriteLine($"[Vt100Emulator] Invalid scrolling region parameters (top={top}, bottom={bottom}), reset to full screen");
-                // System.Console.WriteLine($"[Vt100Emulator] Invalid scrolling region parameters (top={top}, bottom={bottom}), reset to full screen");
             }
         }
         else
         {
-            // Only one parameter - reset to full screen
             _scrollRegionTop = -1;
             _scrollRegionBottom = -1;
-            Debug.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen (only one parameter provided)");
-            // System.Console.WriteLine($"[Vt100Emulator] Scrolling region reset to full screen (only one parameter provided)");
         }
     }
 
@@ -966,26 +737,13 @@ public class Vt100Emulator
         switch (final)
         {
             case 'B':
-                // VT52: Cursor Down - move cursor down one line, same column
                 MoveCursorDown();
-                Debug.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (VT52 Cursor Down)");
-                // System.Console.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (VT52 Cursor Down)");
                 break;
             case '7':
-                // Save cursor position
-                // TODO: Implement cursor position save/restore
-                Debug.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Save Cursor Position - not yet implemented)");
-                // System.Console.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Save Cursor Position - not yet implemented)");
-                break;
             case '8':
-                // Restore cursor position
-                // TODO: Implement cursor position save/restore
-                Debug.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Restore Cursor Position - not yet implemented)");
-                // System.Console.WriteLine($"[Vt100Emulator] Handled single-char command: ESC{final} (Restore Cursor Position - not yet implemented)");
+                // Save/Restore cursor position - not yet implemented
                 break;
             default:
-                Debug.WriteLine($"[Vt100Emulator] ***Unhandled single-char command: ESC{final}");
-                // System.Console.WriteLine($"[Vt100Emulator] ***Unhandled single-char command: ESC{final}");
                 break;
         }
     }
@@ -1033,148 +791,35 @@ public class Vt100Emulator
 
     private void OnCharacter(object? sender, char c)
     {
-#if DEBUG
-        var stopwatch = Stopwatch.StartNew();
-#endif
-        
-        // Process characters immediately in order - no batching, no reordering
-        
         switch (c)
         {
             case '\r':
                 FlushTextBatch();
-                var crRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-                var crColBefore = _writeCol;
                 _writeCol = 0;
-#if DEBUG
-                if (DebugMode)
-                {
-                    var args = new DebugCommandEventArgs
-                    {
-                        CommandType = "Control Character",
-                        Parameters = "CR (Carriage Return)",
-                        ResultingState = $"cursor moved to col=0",
-                        RawText = "\r",
-                        CommandInterpretation = "Carriage Return: Move cursor to column 0",
-                        CursorRowBefore = crRowBefore,
-                        CursorColBefore = crColBefore,
-                        CursorRowAfter = crRowBefore,
-                        CursorColAfter = 0
-                    };
-                    DebugCommandExecuted?.Invoke(this, args);
-                }
-#endif
                 break;
             case '\n':
                 FlushTextBatch();
-                var lfRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-                var lfColBefore = _writeCol;
                 _writeCol = 0;
                 NewLine();
-                var lfRowAfter = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-#if DEBUG
-                if (DebugMode)
-                {
-                    var args = new DebugCommandEventArgs
-                    {
-                        CommandType = "Control Character",
-                        Parameters = "LF (Line Feed)",
-                        ResultingState = $"cursor moved to line={lfRowAfter}, col=0",
-                        RawText = "\n",
-                        CommandInterpretation = "Line Feed: Move cursor to next line, column 0",
-                        CursorRowBefore = lfRowBefore,
-                        CursorColBefore = lfColBefore,
-                        CursorRowAfter = lfRowAfter,
-                        CursorColAfter = 0
-                    };
-                    DebugCommandExecuted?.Invoke(this, args);
-                }
-#endif
                 break;
             case '\t':
                 FlushTextBatch();
-                var tabRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-                var tabColBefore = _writeCol;
                 InsertTab();
-                var tabColAfter = _writeCol;
-#if DEBUG
-                if (DebugMode)
-                {
-                    var args = new DebugCommandEventArgs
-                    {
-                        CommandType = "Control Character",
-                        Parameters = "TAB (Horizontal Tab)",
-                        ResultingState = $"cursor moved to col={tabColAfter}",
-                        RawText = "\t",
-                        CommandInterpretation = "Horizontal Tab: Move cursor to next tab stop",
-                        CursorRowBefore = tabRowBefore,
-                        CursorColBefore = tabColBefore,
-                        CursorRowAfter = tabRowBefore,
-                        CursorColAfter = tabColAfter
-                    };
-                    DebugCommandExecuted?.Invoke(this, args);
-                }
-#endif
                 break;
             case '\b':
                 FlushTextBatch();
-                var bsRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-                var bsColBefore = _writeCol;
                 if (_writeCol > 0)
                 {
                     _writeCol--;
                 }
-                var bsColAfter = _writeCol;
-#if DEBUG
-                if (DebugMode)
-                {
-                    var args = new DebugCommandEventArgs
-                    {
-                        CommandType = "Control Character",
-                        Parameters = "BS (Backspace)",
-                        ResultingState = $"cursor moved to col={bsColAfter}",
-                        RawText = "\b",
-                        CommandInterpretation = "Backspace: Move cursor back one column",
-                        CursorRowBefore = bsRowBefore,
-                        CursorColBefore = bsColBefore,
-                        CursorRowAfter = bsRowBefore,
-                        CursorColAfter = bsColAfter
-                    };
-                    DebugCommandExecuted?.Invoke(this, args);
-                }
-#endif
                 break;
             case '\x07':
                 FlushTextBatch();
-                var belRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-                var belColBefore = _writeCol;
                 Bell?.Invoke(this, EventArgs.Empty);
-#if DEBUG
-                if (DebugMode)
-                {
-                    var args = new DebugCommandEventArgs
-                    {
-                        CommandType = "Control Character",
-                        Parameters = "BEL (Bell)",
-                        ResultingState = "bell sound triggered",
-                        RawText = "\x07",
-                        CommandInterpretation = "Bell: Sound terminal bell",
-                        CursorRowBefore = belRowBefore,
-                        CursorColBefore = belColBefore,
-                        CursorRowAfter = belRowBefore,
-                        CursorColAfter = belColBefore
-                    };
-                    DebugCommandExecuted?.Invoke(this, args);
-                }
-#endif
                 break;
             default:
-                // Check if character is printable (not a control character)
-                // This includes ASCII printable characters (32-126) and all Unicode printable characters
                 if (!char.IsControl(c) || c == '\t' || c == '\n' || c == '\r')
                 {
-                    // Printable character (including Unicode) - process immediately, no batching
-                    // Track cursor position at start of batch for logging
                     if (_textBatch.Length == 0)
                     {
                         _textBatchStartRow = _currentLineIndex >= 0 ? _currentLineIndex : 0;
@@ -1185,86 +830,21 @@ public class Vt100Emulator
                 }
                 else
                 {
-                    // Unhandled control character - flush batch and log
                     FlushTextBatch();
-                    var charName = GetControlCharName(c);
-                    var charCode = (int)c;
-#if DEBUG
-                    if (DebugMode)
-                    {
-                        var args = new DebugCommandEventArgs
-                        {
-                            CommandType = "Unhandled Control Character",
-                            Parameters = $"code=0x{charCode:X2}, name={charName}",
-                            ResultingState = $"character='\\u{charCode:X4}', not processed",
-                            RawText = c.ToString(),
-                            CommandInterpretation = $"Unhandled control character: {charName} (0x{charCode:X2})",
-                            CursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0,
-                            CursorColBefore = _writeCol,
-                            CursorRowAfter = _currentLineIndex >= 0 ? _currentLineIndex : 0,
-                            CursorColAfter = _writeCol
-                        };
-                        DebugCommandExecuted?.Invoke(this, args);
-                    }
-#endif
                 }
                 break;
         }
-        
-#if DEBUG
-        stopwatch.Stop();
-        RecordPerformance("OnCharacter", stopwatch.ElapsedTicks);
-#endif
     }
     
     private void FlushTextBatch()
     {
-#if DEBUG
-        var stopwatch = Stopwatch.StartNew();
-#endif
-#if DEBUG
-        if (DebugMode && _textBatch.Length > 0)
-        {
-            var text = _textBatch.ToString();
-            var textLength = text.Length;
-            
-            // Use the tracked start position, not a calculated one
-            var cursorRowBefore = _textBatchStartRow >= 0 ? _textBatchStartRow : (_currentLineIndex >= 0 ? _currentLineIndex : 0);
-            var cursorColBefore = _textBatchStartCol >= 0 ? _textBatchStartCol : 0;
-            
-            var cursorRowAfter = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-            var cursorColAfter = _writeCol;
-            
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "Text",
-                Parameters = $"length={textLength}",
-                ResultingState = $"text=\"{AnsiParser.EscapeString(text)}\"",
-                RawText = text,
-                CommandInterpretation = $"Text Output: {textLength} character(s)",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = cursorRowAfter,
-                CursorColAfter = cursorColAfter
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         _textBatch.Clear();
         _textBatchStartRow = -1;
         _textBatchStartCol = -1;
-#if DEBUG
-        stopwatch.Stop();
-        RecordPerformance("FlushTextBatch", stopwatch.ElapsedTicks);
-#endif
     }
 
     private void WriteCharacter(char c, bool suppressScreenChanged = false)
     {
-#if DEBUG
-        var stopwatch = Stopwatch.StartNew();
-#endif
-        
         if (_inAlternateScreen)
         {
             // Alternate screen: buffer is fixed size (_rows lines)
@@ -1348,11 +928,6 @@ public class Vt100Emulator
             MarkLineDirty(line);
         }
         _writeCol++;
-        
-#if DEBUG
-        stopwatch.Stop();
-        RecordPerformance("WriteCharacter", stopwatch.ElapsedTicks);
-#endif
     }
 
     private void NewLine()
@@ -1430,10 +1005,6 @@ public class Vt100Emulator
         if (colIndex < 0) colIndex = 0;
         if (colIndex >= _cols) colIndex = _cols - 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (_inAlternateScreen)
         {
@@ -1452,24 +1023,6 @@ public class Vt100Emulator
             _writeCol = colIndex;
         }
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "CUP",
-                Parameters = $"row={targetRow}, col={targetCol}",
-                ResultingState = $"cursor moved to line={_currentLineIndex}, col={_writeCol}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Cursor Position: row {targetRow} (0-based: {rowIndex}), col {targetCol} (0-based: {colIndex})",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = _currentLineIndex,
-                CursorColAfter = _writeCol
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -1488,10 +1041,6 @@ public class Vt100Emulator
         if (rowIndex < 0) rowIndex = 0;
         if (rowIndex >= _rows) rowIndex = _rows - 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (_inAlternateScreen)
         {
@@ -1508,24 +1057,6 @@ public class Vt100Emulator
             _currentLineIndex = rowIndex;
         }
          
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "VPA",
-                Parameters = $"row={targetRow}",
-                ResultingState = $"cursor moved to line={_currentLineIndex}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Vertical Position Absolute: row {targetRow} (0-based: {rowIndex})",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = _currentLineIndex,
-                CursorColAfter = _writeCol
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -1544,31 +1075,9 @@ public class Vt100Emulator
         if (colIndex < 0) colIndex = 0;
         if (colIndex >= _cols) colIndex = _cols - 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         _writeCol = colIndex;
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "CHA",
-                Parameters = $"col={targetCol}",
-                ResultingState = $"cursor moved to col={_writeCol}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Cursor Horizontal Absolute: col {targetCol} (0-based: {colIndex})",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = cursorRowBefore,
-                CursorColAfter = _writeCol
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -1579,10 +1088,6 @@ public class Vt100Emulator
         // Moves cursor up n lines (default 1)
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (_currentLineIndex >= 0)
         {
@@ -1593,24 +1098,6 @@ public class Vt100Emulator
             _currentLineIndex = 0;
         }
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "CUU",
-                Parameters = $"count={count}",
-                ResultingState = $"cursor moved to line={_currentLineIndex}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Cursor Up: {count} line(s)",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = _currentLineIndex,
-                CursorColAfter = cursorColBefore
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -1621,10 +1108,6 @@ public class Vt100Emulator
         // Moves cursor down n lines (default 1)
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (_inAlternateScreen)
         {
@@ -1655,24 +1138,6 @@ public class Vt100Emulator
             }
         }
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "CUD",
-                Parameters = $"count={count}",
-                ResultingState = $"cursor moved to line={_currentLineIndex}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Cursor Down: {count} line(s)",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = _currentLineIndex,
-                CursorColAfter = cursorColBefore
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -1683,10 +1148,6 @@ public class Vt100Emulator
         // Moves cursor right n columns (default 1)
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         _writeCol += count;
         if (_writeCol >= _cols && _cols > 0)
@@ -1694,24 +1155,6 @@ public class Vt100Emulator
             _writeCol = _cols - 1;
         }
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "CUF",
-                Parameters = $"count={count}",
-                ResultingState = $"cursor moved to col={_writeCol}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Cursor Forward: {count} column(s)",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = cursorRowBefore,
-                CursorColAfter = _writeCol
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -1722,31 +1165,9 @@ public class Vt100Emulator
         // Moves cursor left n columns (default 1)
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         _writeCol = Math.Max(0, _writeCol - count);
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "CUB",
-                Parameters = $"count={count}",
-                ResultingState = $"cursor moved to col={_writeCol}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Cursor Backward: {count} column(s)",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = cursorRowBefore,
-                CursorColAfter = _writeCol
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -1757,10 +1178,6 @@ public class Vt100Emulator
         // Moves cursor to beginning of line n lines down (default 1)
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (_inAlternateScreen)
         {
@@ -1793,24 +1210,6 @@ public class Vt100Emulator
         
         _writeCol = 0;
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "CNL",
-                Parameters = $"count={count}",
-                ResultingState = $"cursor moved to line={_currentLineIndex}, col=0",
-                RawText = command.RawText,
-                CommandInterpretation = $"Cursor Next Line: {count} line(s), col=0",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = _currentLineIndex,
-                CursorColAfter = 0
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -1823,10 +1222,6 @@ public class Vt100Emulator
         // Lines at (scrollBottom - count + 1) to scrollBottom are cleared
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (_inAlternateScreen)
         {
@@ -1864,24 +1259,6 @@ public class Vt100Emulator
             }
         }
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "SU",
-                Parameters = $"count={count}",
-                ResultingState = $"scrolled up {count} line(s), cursor unchanged at line={_currentLineIndex}, col={_writeCol}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Scroll Up: {count} line(s)",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = _currentLineIndex,
-                CursorColAfter = _writeCol
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -1894,10 +1271,6 @@ public class Vt100Emulator
         // Lines at scrollTop to (scrollTop + count - 1) are cleared
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (_inAlternateScreen)
         {
@@ -1941,24 +1314,6 @@ public class Vt100Emulator
             }
         }
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "SD",
-                Parameters = $"count={count}",
-                ResultingState = $"scrolled down {count} line(s), cursor at line={_currentLineIndex}, col={_writeCol}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Scroll Down: {count} line(s)",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = _currentLineIndex,
-                CursorColAfter = _writeCol
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -1970,10 +1325,6 @@ public class Vt100Emulator
         // Lines below move up, blank lines inserted at bottom of scroll region
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (_inAlternateScreen)
         {
@@ -2020,24 +1371,6 @@ public class Vt100Emulator
             }
         }
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "DL",
-                Parameters = $"count={count}",
-                ResultingState = $"deleted {count} line(s) at cursor, cursor at line={_currentLineIndex}, col={_writeCol}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Delete Line: {count} line(s)",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = _currentLineIndex,
-                CursorColAfter = _writeCol
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -2049,10 +1382,6 @@ public class Vt100Emulator
         // Lines below move down, lines at bottom of scroll region are removed
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (_inAlternateScreen)
         {
@@ -2094,24 +1423,6 @@ public class Vt100Emulator
             }
         }
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "IL",
-                Parameters = $"count={count}",
-                ResultingState = $"inserted {count} blank line(s) at cursor, cursor at line={_currentLineIndex}, col={_writeCol}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Insert Line: {count} line(s)",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = _currentLineIndex,
-                CursorColAfter = _writeCol
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -2123,10 +1434,6 @@ public class Vt100Emulator
         // Characters to the right shift left
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (_currentLineIndex >= 0 && _currentLineIndex < _lines.Count)
         {
@@ -2140,24 +1447,6 @@ public class Vt100Emulator
             }
         }
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "DCH",
-                Parameters = $"count={count}",
-                ResultingState = $"deleted {count} character(s) at cursor, cursor at line={_currentLineIndex}, col={_writeCol}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Delete Character: {count} character(s)",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = _currentLineIndex,
-                CursorColAfter = _writeCol
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -2169,10 +1458,6 @@ public class Vt100Emulator
         // Existing characters shift right
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (_currentLineIndex >= 0 && _currentLineIndex < _lines.Count)
         {
@@ -2223,24 +1508,6 @@ public class Vt100Emulator
             }
         }
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "ICH",
-                Parameters = $"count={count}",
-                ResultingState = $"inserted {count} blank character(s) at cursor, cursor at line={_currentLineIndex}, col={_writeCol}",
-                RawText = command.RawText,
-                CommandInterpretation = $"Insert Character: {count} character(s)",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = _currentLineIndex,
-                CursorColAfter = _writeCol
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -2251,10 +1518,6 @@ public class Vt100Emulator
         // Moves cursor to beginning of line n lines up (default 1)
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
         
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (_currentLineIndex >= 0)
         {
@@ -2267,24 +1530,6 @@ public class Vt100Emulator
         
         _writeCol = 0;
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "CPL",
-                Parameters = $"count={count}",
-                ResultingState = $"cursor moved to line={_currentLineIndex}, col=0",
-                RawText = command.RawText,
-                CommandInterpretation = $"Cursor Previous Line: {count} line(s), col=0",
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = _currentLineIndex,
-                CursorColAfter = 0
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
         
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
@@ -2293,33 +1538,10 @@ public class Vt100Emulator
     // Format: ESC[<parameters>m where parameters are semicolon-separated numbers
     private void ProcessSgr(List<int> parameters, AnsiCommand? command = null)
     {
-#if DEBUG
-        var cursorRowBefore = _currentLineIndex >= 0 ? _currentLineIndex : 0;
-        var cursorColBefore = _writeCol;
-#endif
         
         if (parameters.Count == 0)
         {
             ResetAttributes();
-#if DEBUG
-            if (DebugMode)
-            {
-                var rawText = command?.RawText ?? "\x1B[m";
-                var args = new DebugCommandEventArgs
-                {
-                    CommandType = "SGR",
-                    Parameters = "0 (reset all)",
-                    ResultingState = "all attributes reset to defaults",
-                    RawText = rawText,
-                    CommandInterpretation = "SGR (Select Graphic Rendition): Reset all attributes",
-                    CursorRowBefore = cursorRowBefore,
-                    CursorColBefore = cursorColBefore,
-                    CursorRowAfter = cursorRowBefore,
-                    CursorColAfter = cursorColBefore
-                };
-                DebugCommandExecuted?.Invoke(this, args);
-            }
-#endif
             return;
         }
 
@@ -2535,28 +1757,6 @@ public class Vt100Emulator
             i += consumed;
         }
         
-#if DEBUG
-        if (DebugMode)
-        {
-            var rawText = command?.RawText ?? $"\x1B[{string.Join(";", parameters)}m";
-            var paramStr = string.Join(";", parameters);
-            var interpretation = $"SGR (Select Graphic Rendition): Set text attributes";
-            var resultingState = $"fg={_foregroundColor}, bg={_backgroundColor}, bold={_bold}, underline={_underline}, italic={_italic}, reverse={_reverse}";
-            var args = new DebugCommandEventArgs
-            {
-                CommandType = "SGR",
-                Parameters = paramStr,
-                ResultingState = resultingState,
-                RawText = rawText,
-                CommandInterpretation = interpretation,
-                CursorRowBefore = cursorRowBefore,
-                CursorColBefore = cursorColBefore,
-                CursorRowAfter = cursorRowBefore,
-                CursorColAfter = cursorColBefore
-            };
-            DebugCommandExecuted?.Invoke(this, args);
-        }
-#endif
     }
 
     private static int ConvertRgbTo256Color(int r, int g, int b)
