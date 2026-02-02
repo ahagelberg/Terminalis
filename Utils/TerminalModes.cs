@@ -5,7 +5,6 @@ public class TerminalModes
     public bool InAlternateScreen { get; set; } = false;
     public bool CursorKeyMode { get; set; } = false;
     public bool InsertMode { get; set; } = false;
-    public bool AutoWrapMode { get; set; } = true;
     public bool CursorVisible { get; set; } = true;
     public bool BracketedPasteMode { get; set; } = false;
     public int ScrollRegionTop { get; set; } = -1;

@@ -58,8 +58,7 @@ public class Vt100Emulator
     private bool _insertMode = false; // IRM: false = replace mode (default), true = insert mode
     private bool _inAlternateScreen = false;
     private bool _cursorVisible = true;
-    private bool _autoWrapMode = true;
-    
+
     // Alternate screen buffer state
     private List<TerminalLine>? _savedMainScreenLines = null;
     private int _savedMainScreenLineIndex = -1;
