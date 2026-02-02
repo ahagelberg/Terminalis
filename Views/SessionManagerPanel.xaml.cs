@@ -404,19 +404,53 @@ public partial class SessionManagerPanel : UserControl
     {
         if (original is SshSessionConfiguration sshConfig)
         {
-            return new SshSessionConfiguration
+            var duplicate = new SshSessionConfiguration
             {
                 Name = $"{sshConfig.Name} (Copy)",
                 Host = sshConfig.Host,
                 Port = sshConfig.Port,
                 Username = sshConfig.Username,
                 Password = sshConfig.Password,
+                PrivateKeyPath = sshConfig.PrivateKeyPath,
+                PrivateKeyPassphrase = sshConfig.PrivateKeyPassphrase,
                 UsePasswordAuthentication = sshConfig.UsePasswordAuthentication,
                 ConnectionType = sshConfig.ConnectionType,
                 Color = sshConfig.Color,
                 Encoding = sshConfig.Encoding,
-                Group = sshConfig.Group
+                LineEnding = sshConfig.LineEnding,
+                Group = sshConfig.Group,
+                KeepAliveInterval = sshConfig.KeepAliveInterval,
+                ConnectionTimeout = sshConfig.ConnectionTimeout,
+                CompressionEnabled = sshConfig.CompressionEnabled,
+                X11ForwardingEnabled = sshConfig.X11ForwardingEnabled,
+                BellNotification = sshConfig.BellNotification,
+                FontFamily = sshConfig.FontFamily,
+                FontSize = sshConfig.FontSize,
+                ForegroundColor = sshConfig.ForegroundColor,
+                BackgroundColor = sshConfig.BackgroundColor,
+                TerminalResizeMethod = sshConfig.TerminalResizeMethod,
+                ResetScrollOnUserInput = sshConfig.ResetScrollOnUserInput,
+                ResetScrollOnServerOutput = sshConfig.ResetScrollOnServerOutput,
+                ScreenSessionName = sshConfig.ScreenSessionName,
+                BackspaceKey = sshConfig.BackspaceKey,
+                AutoReconnectMode = sshConfig.AutoReconnectMode,
+                GatewaySessionId = sshConfig.GatewaySessionId,
+                AllowTitleChange = sshConfig.AllowTitleChange
             };
+            foreach (var rule in sshConfig.PortForwardingRules)
+            {
+                duplicate.PortForwardingRules.Add(new PortForwardingRule
+                {
+                    Name = rule.Name,
+                    IsLocal = rule.IsLocal,
+                    LocalHost = rule.LocalHost,
+                    LocalPort = rule.LocalPort,
+                    RemoteHost = rule.RemoteHost,
+                    RemotePort = rule.RemotePort,
+                    Enabled = rule.Enabled
+                });
+            }
+            return duplicate;
         }
         throw new NotSupportedException($"Cannot duplicate session type: {original.ConnectionType}");
     }
