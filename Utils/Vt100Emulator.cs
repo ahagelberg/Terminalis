@@ -292,17 +292,11 @@ public class Vt100Emulator
         // Process Erase in Display (J) command
         else if (final == 'J')
         {
-            var paramStr = p.Count > 0 ? string.Join(";", p) : "";
-            var commandStr = $"\x1B[{paramStr}J";
-            var escapedStr = AnsiParser.EscapeString(commandStr);
             ProcessEraseInDisplay(p);
         }
         // Process Erase in Line (K) command
         else if (final == 'K')
         {
-            var paramStr = p.Count > 0 ? string.Join(";", p) : "";
-            var commandStr = $"\x1B[{paramStr}K";
-            var escapedStr = AnsiParser.EscapeString(commandStr);
             ProcessEraseInLine(p);
         }
         // Process Window Manipulation (t) commands
@@ -398,11 +392,9 @@ public class Vt100Emulator
         }
         else
         {
-            // Warn about unhandled CSI commands
             var paramStr = p.Count > 0 ? string.Join(";", p) : "";
             var isPrivate = command.IsPrivate ? "?" : "";
             var commandStr = $"\x1B[{isPrivate}{paramStr}{final}";
-            var escapedStr = AnsiParser.EscapeString(commandStr);
         }
     }
 
@@ -429,8 +421,6 @@ public class Vt100Emulator
                 break;
             case 1049:
                 // DECALTB - Alternate Screen Buffer
-                // When enabled (set=true): save main screen state and switch to alternate buffer
-                // When disabled (set=false): restore main screen state
                 if (set)
                 {
                     SaveMainScreenState();
@@ -499,31 +489,24 @@ public class Vt100Emulator
     private void ProcessEraseInLine(List<int> parameters)
     {
         int param = parameters.Count > 0 ? parameters[0] : 0;
-        
+        string desc = param == 0 ? "cursor to EOL" : param == 1 ? "BOL to cursor" : param == 2 ? "entire line" : $"param={param}";
         if (_currentLineIndex < 0 || _currentLineIndex >= _lines.Count)
         {
             return;
         }
-        
         var line = _lines[_currentLineIndex];
-        
         if (param == 0)
         {
-            // Erase from cursor to end of line
             EraseFromCursorToEndOfLine(line);
         }
         else if (param == 1)
         {
-            // Erase from cursor to beginning of line
             EraseFromCursorToBeginningOfLine(line);
         }
         else if (param == 2)
         {
-            // Erase entire line
             EraseEntireLine(line);
         }
-        
-        // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
 
     private void EraseFromCursorToEndOfScreen()
@@ -695,12 +678,8 @@ public class Vt100Emulator
 
     private void ProcessSetScrollingRegion(List<int> parameters)
     {
-        // ESC [ top ; bottom r - Set scrolling region
-        // Parameters are 1-based (1 = first line)
-        // If no parameters or only one parameter, reset to full screen
         if (parameters.Count == 0)
         {
-            // Reset scrolling region to full screen
             _scrollRegionTop = -1;
             _scrollRegionBottom = -1;
         }
@@ -1021,9 +1000,6 @@ public class Vt100Emulator
             _currentLineIndex = rowIndex;
             _writeCol = colIndex;
         }
-        
-        
-        // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
 
     private void ProcessVerticalPositionAbsolute(List<int> parameters, AnsiCommand command)
@@ -1319,12 +1295,7 @@ public class Vt100Emulator
 
     private void ProcessDeleteLine(List<int> parameters, AnsiCommand command)
     {
-        // DL (Delete Line) - ESC [ Ps M
-        // Deletes Ps lines at the cursor position (default 1)
-        // Lines below move up, blank lines inserted at bottom of scroll region
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
-        
-        
         if (_inAlternateScreen)
         {
             // Determine scroll region bounds
@@ -1377,14 +1348,9 @@ public class Vt100Emulator
     private void ProcessInsertLine(List<int> parameters, AnsiCommand command)
     {
         // IL (Insert Line) - ESC [ Ps L
-        // Inserts Ps blank lines at the cursor position (default 1)
-        // Lines below move down, lines at bottom of scroll region are removed
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
-        
-        
         if (_inAlternateScreen)
         {
-            // Determine scroll region bounds
             int scrollTop = _scrollRegionTop >= 0 ? _scrollRegionTop : 0;
             int scrollBottom = _scrollRegionBottom >= 0 ? _scrollRegionBottom : (_rows - 1);
             
@@ -1856,14 +1822,12 @@ public class Vt100Emulator
     private void RestoreMainScreenState()
     {
         _inAlternateScreen = false;
-        
         if (_savedMainScreenLines == null)
         {
             _lines.Clear();
             _currentLineIndex = -1;
             _writeCol = 0;
             ResetAttributes();
-            // Don't fire events - ScreenChanged will be fired at end of ProcessData
             return;
         }
         

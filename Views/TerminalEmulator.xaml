@@ -13,12 +13,21 @@
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
-            <Canvas x:Name="TerminalCanvas" 
-                Grid.Column="0"
+        <ScrollViewer x:Name="TerminalScrollViewer"
+                      Grid.Column="0"
+                      FlowDirection="LeftToRight"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Hidden"
+                      Focusable="False"
+                      Background="Black">
+            <Canvas x:Name="TerminalCanvas"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Top"
                     Background="Black"
                     Focusable="False"
-                ClipToBounds="True"
-                IsHitTestVisible="True"/>
+                    ClipToBounds="False"
+                    IsHitTestVisible="True"/>
+        </ScrollViewer>
         <ScrollBar x:Name="TerminalScrollBar"
                    Grid.Column="1"
                    Orientation="Vertical"

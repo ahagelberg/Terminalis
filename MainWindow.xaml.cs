@@ -26,7 +26,6 @@ public partial class MainWindow : Window
     private ApplicationSettings _appSettings;
     private Adorner? _tabDropIndicator;
     private TerminalTabItem? _draggedTab;
-
     public MainWindow()
     {
         InitializeComponent();
@@ -664,7 +663,6 @@ public partial class MainWindow : Window
         {
             StatusTextBlock.Text = "Ready";
         }
-        
         UpdateTitleBarColor();
     }
 

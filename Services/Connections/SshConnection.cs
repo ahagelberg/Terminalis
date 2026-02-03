@@ -492,10 +492,6 @@ public class SshConnection : ITerminalConnection
             throw new InvalidOperationException("Connection is not established");
         }
 
-        var escapedData = EscapeString(data);
-        Debug.WriteLine($"[SshConnection] [SEND] ({data.Length} bytes): {escapedData}");
-        System.Console.WriteLine($"[SshConnection] [SEND] ({data.Length} bytes): {escapedData}");
-
         await Task.Run(() =>
         {
             try
@@ -519,11 +515,6 @@ public class SshConnection : ITerminalConnection
         {
             throw new InvalidOperationException("Connection is not established");
         }
-
-        var dataString = Encoding.UTF8.GetString(data);
-        var escapedData = EscapeString(dataString);
-        Debug.WriteLine($"[SshConnection] [SEND] ({data.Length} bytes): {escapedData}");
-        System.Console.WriteLine($"[SshConnection] [SEND] ({data.Length} bytes): {escapedData}");
 
         await Task.Run(() =>
         {
@@ -646,50 +637,7 @@ public class SshConnection : ITerminalConnection
     private void OnShellStreamDataReceived(object? sender, ShellDataEventArgs e)
     {
         var data = Encoding.UTF8.GetString(e.Data);
-        var escapedData = EscapeString(data);
-        Debug.WriteLine($"[SshConnection] [RECV] ({data.Length} bytes): {escapedData}");
-        System.Console.WriteLine($"[SshConnection] [RECV] ({data.Length} bytes): {escapedData}");
         DataReceived?.Invoke(this, data);
-    }
-
-    private static string EscapeString(string s)
-    {
-        var sb = new StringBuilder();
-        foreach (var c in s)
-        {
-            switch (c)
-            {
-                case '\x1B':
-                    sb.Append("\\x1B");
-                    break;
-                case '\r':
-                    sb.Append("\\r");
-                    break;
-                case '\n':
-                    sb.Append("\\n");
-                    break;
-                case '\t':
-                    sb.Append("\\t");
-                    break;
-                case '\b':
-                    sb.Append("\\b");
-                    break;
-                case '\x07':
-                    sb.Append("\\a");
-                    break;
-                default:
-                    if (c >= 32 && c < 127)
-                    {
-                        sb.Append(c);
-                    }
-                    else
-                    {
-                        sb.Append($"\\u{(int)c:X4}");
-                    }
-                    break;
-            }
-        }
-        return sb.ToString();
     }
 
     private void OnShellStreamClosed(object? sender, EventArgs e)

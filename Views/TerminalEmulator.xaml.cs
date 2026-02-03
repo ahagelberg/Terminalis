@@ -218,7 +218,19 @@ namespace TabbySSH.Views
         var formattedText = new FormattedText("M", System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight, _typeface, fontSize, Brushes.White, VisualTreeHelper.GetDpi(this).PixelsPerDip);
         _charWidth = formattedText.Width;
         _charHeight = formattedText.Height;
+        _charHeightSnapped = _charHeight;
+        _charWidthSnapped = _charWidth;
         _fontSize = fontSize;
+    }
+
+    private void EnsureSnappedMetrics()
+    {
+        if (_charHeight <= 0 || _charWidth <= 0) return;
+        var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        _cachedDpi = dpi;
+        _dpiCached = true;
+        _charHeightSnapped = Math.Round(_charHeight * dpi) / dpi;
+        _charWidthSnapped = Math.Round(_charWidth * dpi) / dpi;
     }
 
     public void UpdateSettings(string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool? resetScrollOnUserInput = null, bool? resetScrollOnServerOutput = null, string? backspaceKey = null, bool? allowTitleChange = null)
@@ -364,7 +376,6 @@ namespace TabbySSH.Views
         Dispatcher.BeginInvoke(new Action(() =>
         {
             TerminalCanvas.Width = cols * _charWidth;
-            // Canvas height should be large enough for scrollback, but we'll update it dynamically
             UpdateCanvasHeight();
         }));
     }
@@ -418,46 +429,6 @@ namespace TabbySSH.Views
         }));
     }
 
-    private static string EscapeString(string s)
-    {
-        var sb = new System.Text.StringBuilder();
-        foreach (var c in s)
-        {
-            switch (c)
-            {
-                case '\x1B':
-                    sb.Append("\\x1B");
-                    break;
-                case '\r':
-                    sb.Append("\\r");
-                    break;
-                case '\n':
-                    sb.Append("\\n");
-                    break;
-                case '\t':
-                    sb.Append("\\t");
-                    break;
-                case '\b':
-                    sb.Append("\\b");
-                    break;
-                case '\x07':
-                    sb.Append("\\a");
-                    break;
-                default:
-                    if (c >= 32 && c < 127)
-                    {
-                        sb.Append(c);
-                    }
-                    else
-                    {
-                        sb.Append($"\\u{(int)c:X4}");
-                    }
-                    break;
-            }
-        }
-        return sb.ToString();
-    }
-
     private void OnConnectionClosed(object? sender, ConnectionClosedEventArgs e)
     {
         Dispatcher.Invoke(() =>
@@ -472,7 +443,9 @@ namespace TabbySSH.Views
     private readonly System.Text.StringBuilder _textRunBuilder = new System.Text.StringBuilder();
     private double _cachedDpi = 96.0;
     private bool _dpiCached = false;
-    
+    private double _charHeightSnapped;
+    private double _charWidthSnapped;
+
     // Incremental rendering: cache rendered line visuals
     private readonly Dictionary<int, VisualHost> _renderedLines = new Dictionary<int, VisualHost>();
     private VisualHost? _cursorVisual = null;
@@ -638,14 +611,14 @@ namespace TabbySSH.Views
         {
             var currentFg = GetForegroundColor();
             var cursorRow = _emulator.CursorRow;
-            
-            var y = cursorRow * _charHeight;
-            
+            EnsureSnappedMetrics();
+            var y = cursorRow * _charHeightSnapped;
+
             if (y < 0 || TerminalCanvas.ActualHeight <= 0)
             {
                 return;
             }
-            
+
             if (_lineFlashOverlay == null)
             {
                 _lineFlashOverlay = new Rectangle
@@ -655,7 +628,7 @@ namespace TabbySSH.Views
             }
 
             _lineFlashOverlay.Width = TerminalCanvas.ActualWidth > 0 ? TerminalCanvas.ActualWidth : ActualWidth;
-            _lineFlashOverlay.Height = _charHeight;
+            _lineFlashOverlay.Height = _charHeightSnapped;
             Canvas.SetLeft(_lineFlashOverlay, 0);
             Canvas.SetTop(_lineFlashOverlay, y);
             _lineFlashOverlay.Fill = new SolidColorBrush(currentFg);
@@ -704,80 +677,83 @@ namespace TabbySSH.Views
 
     // Renderer methods are read-only - they only read from the buffer and create UI elements.
     // The buffer is only modified by server output via OnDataReceived -> _emulator.ProcessData()
+    private TerminalLine? GetLineForRender(int lineIndex)
+    {
+        return _emulator?.GetLine(lineIndex);
+    }
+
     private void RenderScreen()
     {
-        if (_emulator == null || _typeface == null)
+        if (_typeface == null)
         {
             return;
         }
 
-        var currentCursorRow = _emulator.CursorRow;
-        var currentCursorCol = _emulator.CursorCol;
-        var lineFlashOverlay = _lineFlashOverlay;
-
-        var totalLines = _emulator.LineCount;
-        var visibleRows = (int)(ActualHeight / _charHeight);
-        
-        int startLineIndex;
-        int endLineIndex;
-        int viewportOffset = 0;
-        
-        if (_emulator.InAlternateScreen)
+        var totalLines = GetDisplayLineCount();
+        if (totalLines == 0)
         {
-            var rows = _emulator.Rows;
-            if (totalLines <= visibleRows)
+            if (_emulator == null) return;
+        }
+
+        EnsureSnappedMetrics();
+
+        var visibleRows = Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
+        int startLineIndex = 0;
+        int endLineIndex = 0;
+        int viewportOffset = 0;
+
+        if (_emulator != null)
+        {
+            var currentCursorRow = _emulator.CursorRow;
+            var currentCursorCol = _emulator.CursorCol;
+            if (_emulator.InAlternateScreen)
+            {
+                var rows = _emulator.Rows;
+                if (totalLines <= visibleRows)
+                {
+                    startLineIndex = 0;
+                    endLineIndex = totalLines;
+                }
+                else
+                {
+                    startLineIndex = Math.Max(0, rows - visibleRows - _scrollOffset);
+                    endLineIndex = Math.Min(rows, startLineIndex + visibleRows);
+                    if (_scrollOffset == 0)
+                    {
+                        viewportOffset = visibleRows - (endLineIndex - startLineIndex);
+                    }
+                }
+            }
+            else if (totalLines <= visibleRows)
             {
                 startLineIndex = 0;
                 endLineIndex = totalLines;
             }
             else
             {
-                startLineIndex = Math.Max(0, rows - visibleRows - _scrollOffset);
-                endLineIndex = Math.Min(rows, startLineIndex + visibleRows);
+                startLineIndex = Math.Max(0, totalLines - visibleRows - _scrollOffset);
+                endLineIndex = Math.Min(totalLines, startLineIndex + visibleRows);
                 if (_scrollOffset == 0)
                 {
                     viewportOffset = visibleRows - (endLineIndex - startLineIndex);
                 }
             }
-        }
-        else if (totalLines <= visibleRows)
-        {
-            startLineIndex = 0;
-            endLineIndex = totalLines;
-        }
-        else
-        {
-            startLineIndex = Math.Max(0, totalLines - visibleRows - _scrollOffset);
-            endLineIndex = Math.Min(totalLines, startLineIndex + visibleRows);
-            if (_scrollOffset == 0)
+
+            bool viewportChanged = _lastStartLineIndex != startLineIndex || _lastEndLineIndex != endLineIndex || _lastViewportOffset != viewportOffset;
+            if (viewportChanged)
             {
-                viewportOffset = visibleRows - (endLineIndex - startLineIndex);
+                HandleViewportChange(startLineIndex, endLineIndex, viewportOffset, visibleRows);
+                _lastStartLineIndex = startLineIndex;
+                _lastEndLineIndex = endLineIndex;
+                _lastViewportOffset = viewportOffset;
             }
-        }
 
-        // Check if viewport changed (scrolling) - if so, handle graphically
-        bool viewportChanged = _lastStartLineIndex != startLineIndex || _lastEndLineIndex != endLineIndex || _lastViewportOffset != viewportOffset;
-        
-        if (viewportChanged)
-        {
-            // Viewport changed - handle scrolling graphically
-            HandleViewportChange(startLineIndex, endLineIndex, viewportOffset, visibleRows);
-            _lastStartLineIndex = startLineIndex;
-            _lastEndLineIndex = endLineIndex;
-            _lastViewportOffset = viewportOffset;
-        }
-
-        // Get dirty lines and render only those (also re-render visible lines when selection changes so highlight is drawn)
-        var dirtyLines = _emulator.GetDirtyLines();
-        bool selectionActive = _hasSelection || _isSelecting;
-        
-        if (dirtyLines.Count > 0 || viewportChanged || _renderedLines.Count == 0 || selectionActive)
-        {
-            // Render dirty lines, or all visible lines if viewport changed, initial render, or selection state changed
-            var linesToRender = (viewportChanged || _renderedLines.Count == 0 || selectionActive) ? 
-                Enumerable.Range(startLineIndex, endLineIndex - startLineIndex).ToHashSet() : 
+            var dirtyLines = _emulator.GetDirtyLines();
+            bool selectionActive = _hasSelection || _isSelecting;
+            var linesToRender = (viewportChanged || _renderedLines.Count == 0 || selectionActive) ?
+                Enumerable.Range(startLineIndex, endLineIndex - startLineIndex).ToHashSet() :
                 dirtyLines;
-            
+
             foreach (var lineIndex in linesToRender)
             {
                 if (lineIndex >= startLineIndex && lineIndex < endLineIndex)
@@ -785,15 +761,27 @@ namespace TabbySSH.Views
                     RenderLineIncremental(lineIndex, startLineIndex, viewportOffset);
                 }
             }
-            
             _emulator.ClearDirtyLines();
+
+            UpdateCursor(currentCursorRow, currentCursorCol, startLineIndex, viewportOffset);
+            _previousCursorRow = currentCursorRow;
+            _previousCursorCol = currentCursorCol;
+            return;
         }
 
-        // Update cursor
-        UpdateCursor(currentCursorRow, currentCursorCol, startLineIndex, viewportOffset);
+        bool rawViewportChanged = _lastStartLineIndex != startLineIndex || _lastEndLineIndex != endLineIndex || _lastViewportOffset != viewportOffset;
+        if (rawViewportChanged)
+        {
+            HandleViewportChange(startLineIndex, endLineIndex, viewportOffset, visibleRows);
+            _lastStartLineIndex = startLineIndex;
+            _lastEndLineIndex = endLineIndex;
+            _lastViewportOffset = viewportOffset;
+        }
 
-        _previousCursorRow = currentCursorRow;
-        _previousCursorCol = currentCursorCol;
+        for (var lineIndex = startLineIndex; lineIndex < endLineIndex; lineIndex++)
+        {
+            RenderLineIncremental(lineIndex, startLineIndex, viewportOffset);
+        }
     }
 
     private void HandleViewportChange(int startLineIndex, int endLineIndex, int viewportOffset, int visibleRows)
@@ -822,7 +810,7 @@ namespace TabbySSH.Views
             var lineIndex = kvp.Key;
             var visual = kvp.Value;
             var viewportRow = (lineIndex - startLineIndex) + viewportOffset;
-            var y = viewportRow * _charHeight;
+            var y = viewportRow * _charHeightSnapped;
             Canvas.SetTop(visual, y);
         }
     }
@@ -830,7 +818,7 @@ namespace TabbySSH.Views
     private void RenderLineIncremental(int lineIndex, int startLineIndex, int viewportOffset)
     {
         var viewportRow = (lineIndex - startLineIndex) + viewportOffset;
-        var y = viewportRow * _charHeight;
+        var y = viewportRow * _charHeightSnapped;
 
         // Remove old visual if it exists
         if (_renderedLines.TryGetValue(lineIndex, out var oldVisual))
@@ -872,8 +860,9 @@ namespace TabbySSH.Views
         }
 
         // Only show cursor when at bottom (scrollOffset == 0) and cursor is visible
+        var visibleRowsForCursor = Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
         if (_scrollOffset == 0 && cursorRow >= 0 && _emulator != null && _emulator.CursorVisible && 
-            cursorRow >= startLineIndex && cursorRow < startLineIndex + (int)(ActualHeight / _charHeight))
+            cursorRow >= startLineIndex && cursorRow < startLineIndex + visibleRowsForCursor)
         {
             var drawingVisual = new DrawingVisual();
             DrawingContext? dc = null;
@@ -882,8 +871,8 @@ namespace TabbySSH.Views
                 dc = drawingVisual.RenderOpen();
                 
                 // Render cursor at y=0 relative to DrawingVisual (positioning handled by Canvas.SetTop)
-                var x = cursorCol * _charWidth;
-                var y = _charHeight - 2; // Position within the line (underline at bottom)
+                var x = cursorCol * _charWidthSnapped;
+                var y = _charHeightSnapped - 2; // Position within the line (underline at bottom)
 
                 var cell = _emulator.GetCell(cursorRow, cursorCol);
                 var fg = cell.Reverse ? cell.BackgroundColor : cell.ForegroundColor;
@@ -894,7 +883,7 @@ namespace TabbySSH.Views
                 var foregroundColor = foregroundBrush is SolidColorBrush fgSolid ? fgSolid.Color : Colors.White;
 
                 // Draw underline cursor
-                var underlineRect = new Rect(x, y, _charWidth, 2);
+                var underlineRect = new Rect(x, y, _charWidthSnapped, 2);
                 dc.DrawRectangle(foregroundBrush, null, underlineRect);
             }
             finally
@@ -904,22 +893,22 @@ namespace TabbySSH.Views
 
             var host = new VisualHost(drawingVisual);
             var viewportRowPos = (cursorRow - startLineIndex) + viewportOffset;
-            Canvas.SetTop(host, viewportRowPos * _charHeight);
+            Canvas.SetTop(host, viewportRowPos * _charHeightSnapped);
             Canvas.SetLeft(host, 0);
             TerminalCanvas.Children.Add(host);
             _cursorVisual = host;
         }
     }
 
-    // Read-only: only reads from buffer, never modifies it
+    // Read-only: only reads from buffer, never modifies it.
     private void RenderLine(DrawingContext dc, int lineIndex, int viewportRow)
     {
-        if (_emulator == null || _typeface == null)
+        if (_typeface == null)
         {
             return;
         }
 
-        var line = _emulator.GetLine(lineIndex);
+        var line = GetLineForRender(lineIndex);
         if (line == null)
         {
             return;
@@ -929,19 +918,20 @@ namespace TabbySSH.Views
         // so we draw at y=0 relative to the DrawingVisual. viewportRow is only used for
         // calculating which line to render, not for positioning.
         var y = 0.0;
-        
-        // Calculate how many columns fit in the viewport width
+
+        var cells = line.Cells;
         var viewportWidth = TerminalCanvas.ActualWidth > 0 ? TerminalCanvas.ActualWidth : ActualWidth;
-        var visibleCols = (int)(viewportWidth / _charWidth);
+        int visibleCols = (int)(viewportWidth / _charWidth);
         if (visibleCols <= 0)
         {
             return;
         }
-        
-        // Only render as many cells as fit in the viewport
-        // Cache Cells collection reference to avoid repeated property access
-        var cells = line.Cells;
+
         var maxCol = Math.Min(cells.Count, visibleCols);
+        if (maxCol <= 0)
+        {
+            return;
+        }
 
         // First pass: draw all background rectangles (batch by color). For selected cells use inverted (fg) color so highlight is visible.
         var currentBg = -1;
@@ -952,14 +942,14 @@ namespace TabbySSH.Views
             var cellBg = cell.Reverse ? cell.ForegroundColor : cell.BackgroundColor;
             var cellFg = cell.Reverse ? cell.BackgroundColor : cell.ForegroundColor;
             var bg = (_hasSelection || _isSelecting) && IsCellSelected(lineIndex, col) ? cellFg : cellBg;
-            
+
             if (bg != currentBg)
             {
                 if (currentBg >= 0 && col > bgStartCol)
                 {
-                    var bgWidth = (col - bgStartCol) * _charWidth;
+                    var bgWidth = (col - bgStartCol) * _charWidthSnapped;
                     var bgBrush = GetColor(currentBg);
-                    var bgRect = new Rect(bgStartCol * _charWidth, y, bgWidth, _charHeight);
+                    var bgRect = new Rect(bgStartCol * _charWidthSnapped, y, bgWidth, _charHeightSnapped);
                     dc.DrawRectangle(bgBrush, null, bgRect);
                 }
                 bgStartCol = col;
@@ -969,9 +959,9 @@ namespace TabbySSH.Views
         // Draw final background rectangle
         if (currentBg >= 0 && maxCol > bgStartCol)
         {
-            var bgWidth = (maxCol - bgStartCol) * _charWidth;
+            var bgWidth = (maxCol - bgStartCol) * _charWidthSnapped;
             var bgBrush = GetColor(currentBg);
-            var bgRect = new Rect(bgStartCol * _charWidth, y, bgWidth, _charHeight);
+            var bgRect = new Rect(bgStartCol * _charWidthSnapped, y, bgWidth, _charHeightSnapped);
             dc.DrawRectangle(bgBrush, null, bgRect);
         }
 
@@ -1016,7 +1006,7 @@ namespace TabbySSH.Views
                 {
                     var textRun = _textRunBuilder.ToString();
                     RenderTextSegment(dc, x, y, textRun, currentFg, currentBg, currentBold, currentItalic, currentUnderline, currentFaint, currentCrossedOut, currentDoubleUnderline, currentOverline, currentConceal, textRunStartCol, lineIndex);
-                    x += textRun.Length * _charWidth;
+                    x += textRun.Length * _charWidthSnapped;
                     _textRunBuilder.Clear();
                 }
 
@@ -1100,7 +1090,7 @@ namespace TabbySSH.Views
             return;
         }
 
-        if (x < 0 || y < 0 || x + text.Length * _charWidth > TerminalCanvas.Width)
+        if (x < 0 || y < 0 || x + text.Length * _charWidthSnapped > TerminalCanvas.Width)
         {
             return;
         }
@@ -1145,7 +1135,7 @@ namespace TabbySSH.Views
                     var cellIsSelected = IsCellSelected(lineIndex, charCol);
                     
                     // Calculate exact position based on column index to avoid accumulation errors
-                    var charX = charCol * _charWidth;
+                    var charX = charCol * _charWidthSnapped;
                     
                     var charForeground = cellIsSelected ? background : foreground;
                     var charBackground = cellIsSelected ? foreground : background;
@@ -1162,7 +1152,7 @@ namespace TabbySSH.Views
                     }
 
                     // Draw background
-                    var charBgRect = new Rect(charX, y, _charWidth + 0.1, _charHeight);
+                    var charBgRect = new Rect(charX, y, _charWidthSnapped + 0.1, _charHeightSnapped);
                     dc.DrawRectangle(charBackground, null, charBgRect);
 
                     // Create FormattedText for character
@@ -1199,7 +1189,7 @@ namespace TabbySSH.Views
                     // Draw double underline if needed
                     if (doubleUnderline)
                     {
-                        var underlineRect = new Rect(charX, y + _charHeight - 3, _charWidth, 1);
+                        var underlineRect = new Rect(charX, y + _charHeightSnapped - 3, _charWidthSnapped, 1);
                         dc.DrawRectangle(charForeground, null, underlineRect);
                     }
                 }
@@ -1246,22 +1236,18 @@ namespace TabbySSH.Views
         if (_glyphTypeface != null && !bold && !italic && !underline && !overline && !crossedOut && !doubleUnderline)
         {
             // Fast path: use GlyphRun for plain text
-            // Pre-allocate arrays to avoid List allocations and resizing
+            // Use fixed advance width per character so box-drawing and all Unicode render in a strict grid
             var textLength = text.Length;
             var glyphIndices = new ushort[textLength];
             var advanceWidths = new double[textLength];
             int glyphCount = 0;
-            
-            // Cache advance width multiplier and array reference
-            var advanceMultiplier = _fontSize;
-            var advanceWidthsArray = _glyphTypeface.AdvanceWidths;
-            
+
             foreach (var ch in text)
             {
                 if (_glyphTypeface.CharacterToGlyphMap.TryGetValue(ch, out var glyphIndex))
                 {
                     glyphIndices[glyphCount] = glyphIndex;
-                    advanceWidths[glyphCount] = advanceWidthsArray[glyphIndex] * advanceMultiplier;
+                    advanceWidths[glyphCount] = _charWidthSnapped;
                     glyphCount++;
                 }
             }
@@ -1293,18 +1279,41 @@ namespace TabbySSH.Views
                 
                 dc.DrawGlyphRun(foreground, glyphRun);
             }
+            else
+            {
+                // Plain text but no glyphs in font (e.g. some box-drawing); draw with FormattedText so it appears
+                if (!_dpiCached)
+                {
+                    _cachedDpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+                    _dpiCached = true;
+                }
+                var formattedText = new FormattedText(
+                    text,
+                    CultureInfo.CurrentCulture,
+                    FlowDirection.LeftToRight,
+                    _typeface,
+                    _fontSize,
+                    foreground,
+                    _cachedDpi);
+                formattedText.SetFontWeight(fontWeight);
+                formattedText.SetFontStyle(fontStyle);
+                if (underline || doubleUnderline)
+                    formattedText.SetTextDecorations(TextDecorations.Underline);
+                if (overline)
+                    formattedText.SetTextDecorations(TextDecorations.OverLine);
+                if (crossedOut)
+                    formattedText.SetTextDecorations(TextDecorations.Strikethrough);
+                dc.DrawText(formattedText, new Point(x, y));
+            }
         }
         else
         {
             // Fallback to FormattedText for styled text
-            // Cache DPI value to avoid repeated calls
             if (!_dpiCached)
             {
                 _cachedDpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
                 _dpiCached = true;
             }
-            
-            // Create FormattedText for rendering
             var formattedText = new FormattedText(
                 text,
                 CultureInfo.CurrentCulture,
@@ -1313,33 +1322,21 @@ namespace TabbySSH.Views
                 _fontSize,
                 foreground,
                 _cachedDpi);
-            
             formattedText.SetFontWeight(fontWeight);
             formattedText.SetFontStyle(fontStyle);
-            
             if (underline || doubleUnderline)
-            {
                 formattedText.SetTextDecorations(TextDecorations.Underline);
-            }
-            
             if (overline)
-            {
                 formattedText.SetTextDecorations(TextDecorations.OverLine);
-            }
-            
             if (crossedOut)
-            {
                 formattedText.SetTextDecorations(TextDecorations.Strikethrough);
-            }
-
-            // Draw text
             dc.DrawText(formattedText, new Point(x, y));
         }
 
         // Draw double underline if needed
         if (doubleUnderline)
         {
-            var underlineRect = new Rect(x, y + _charHeight - 3, text.Length * _charWidth, 1);
+            var underlineRect = new Rect(x, y + _charHeightSnapped - 3, text.Length * _charWidthSnapped, 1);
             dc.DrawRectangle(foreground, null, underlineRect);
         }
     }
@@ -1464,10 +1461,10 @@ namespace TabbySSH.Views
         {
             return;
         }
-        
+
         var viewportRow = (cursorLineIndex - startLineIndex) + viewportOffset;
-        var x = cursorCol * _charWidth;
-        var y = viewportRow * _charHeight;
+        var x = cursorCol * _charWidthSnapped;
+        var y = viewportRow * _charHeightSnapped;
 
         var cell = _emulator.GetCell(cursorLineIndex, cursorCol);
         var fg = cell.Reverse ? cell.BackgroundColor : cell.ForegroundColor;
@@ -1478,12 +1475,12 @@ namespace TabbySSH.Views
 
         var underlineRect = new Rectangle
         {
-            Width = _charWidth,
+            Width = _charWidthSnapped,
             Height = 2,
             Fill = foregroundBrush
         };
         Canvas.SetLeft(underlineRect, x);
-        Canvas.SetTop(underlineRect, y + _charHeight - 2);
+        Canvas.SetTop(underlineRect, y + _charHeightSnapped - 2);
         Canvas.SetZIndex(underlineRect, 1000);
         TerminalCanvas.Children.Add(underlineRect);
     }
@@ -1635,11 +1632,11 @@ namespace TabbySSH.Views
                 }
                 
                 // Calculate cell position
-                var viewportRow = Math.Max(0, (int)(pos.Y / _charHeight));
+                var viewportRow = Math.Max(0, (int)(pos.Y / _charHeightSnapped));
                 var lineIndex = GetLineIndexAtViewportRow(viewportRow);
                 var line = _emulator.GetLine(lineIndex);
                 var maxCol = line != null ? Math.Max(0, line.Cells.Count - 1) : _emulator.Cols - 1;
-                var col = Math.Max(0, Math.Min(maxCol, (int)(pos.X / _charWidth)));
+                var col = Math.Max(0, Math.Min(maxCol, (int)(pos.X / _charWidthSnapped)));
                 
                 // Handle double-click (word selection) and triple-click (line selection)
                 if (e.ClickCount == 2)
@@ -2353,9 +2350,14 @@ namespace TabbySSH.Views
     {
     }
 
+    private int GetDisplayLineCount()
+    {
+        return _emulator?.LineCount ?? 0;
+    }
+
     private void TerminalEmulator_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (_emulator == null)
+        if (GetDisplayLineCount() == 0)
         {
             return;
         }
@@ -2369,8 +2371,8 @@ namespace TabbySSH.Views
         // Scroll by SCROLL_LINES_PER_TICK lines per wheel tick
         // e.Delta > 0 means scroll up (see older content), e.Delta < 0 means scroll down (see newer content)
         var delta = e.Delta > 0 ? SCROLL_LINES_PER_TICK : -SCROLL_LINES_PER_TICK;
-        var totalLines = _emulator.LineCount;
-        var visibleRows = (int)(ActualHeight / _charHeight);
+        var totalLines = GetDisplayLineCount();
+        var visibleRows = Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
         var maxScroll = Math.Max(0, totalLines - visibleRows);
         var newScrollOffset = Math.Max(0, Math.Min(_scrollOffset + delta, maxScroll));
         if (newScrollOffset != _scrollOffset)
@@ -2390,10 +2392,9 @@ namespace TabbySSH.Views
         {
             return;
         }
-        
-        // Canvas should only be as tall as the visible viewport, not the entire scrollback
-        // This prevents it from extending beyond the container
+
         TerminalCanvas.Height = ActualHeight;
+
         UpdateScrollBar();
         UpdateCanvasTransform();
     }
@@ -2432,8 +2433,8 @@ namespace TabbySSH.Views
             return;
         }
         
-        var totalLines = _emulator.LineCount;
-        var visibleRows = (int)(ActualHeight / _charHeight);
+        var totalLines = GetDisplayLineCount();
+        var visibleRows = Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
         var maxScroll = Math.Max(0, totalLines - visibleRows);
         
         if (maxScroll > 0 && totalLines > 0)
@@ -2451,13 +2452,13 @@ namespace TabbySSH.Views
     
     private void TerminalScrollBar_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_emulator == null)
+        if (GetDisplayLineCount() == 0)
         {
             return;
         }
         
-        var totalLines = _emulator.LineCount;
-        var visibleRows = (int)(ActualHeight / _charHeight);
+        var totalLines = GetDisplayLineCount();
+        var visibleRows = Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
         var maxScroll = Math.Max(0, totalLines - visibleRows);
         var newScrollOffset = maxScroll - (int)e.NewValue;
         
@@ -2471,13 +2472,13 @@ namespace TabbySSH.Views
     
     private void TerminalScrollBar_Scroll(object sender, ScrollEventArgs e)
     {
-        if (_emulator == null)
+        if (GetDisplayLineCount() == 0)
         {
             return;
         }
         
-        var totalLines = _emulator.LineCount;
-        var visibleRows = (int)(ActualHeight / _charHeight);
+        var totalLines = GetDisplayLineCount();
+        var visibleRows = Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
         var maxScroll = Math.Max(0, totalLines - visibleRows);
         var newScrollOffset = maxScroll - (int)TerminalScrollBar.Value;
         
