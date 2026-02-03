@@ -84,17 +84,8 @@ public partial class MainWindow : Window
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
-        var statePath = Path.Combine(_configManager.AppDataPath, WINDOW_STATE_FILE);
-        var state = _configManager.LoadWindowState<Models.WindowState>(statePath);
-        if (state != null && state.State == System.Windows.WindowState.Maximized)
-        {
-            WindowState = System.Windows.WindowState.Maximized;
-        }
-        
         if (_appSettings.RestoreActiveSessionsOnStartup)
-        {
             RestoreActiveSessions();
-        }
     }
 
     private void MainWindow_Closing(object? sender, CancelEventArgs e)
@@ -107,21 +98,23 @@ public partial class MainWindow : Window
         }
     }
 
+    private string GetWindowStatePath() => Path.Combine(_configManager.AppDataPath, WINDOW_STATE_FILE);
+
     private void LoadWindowState()
     {
-        var statePath = Path.Combine(_configManager.AppDataPath, WINDOW_STATE_FILE);
-        var state = _configManager.LoadWindowState<Models.WindowState>(statePath);
-        if (state != null)
+        var state = _configManager.LoadWindowState<Models.WindowState>(GetWindowStatePath());
+        if (state == null) return;
+
+        if (IsValidWindowPosition(state.Left, state.Top, state.Width, state.Height))
         {
-            if (IsValidWindowPosition(state.Left, state.Top, state.Width, state.Height))
-            {
-                WindowStartupLocation = WindowStartupLocation.Manual;
-                Left = state.Left;
-                Top = state.Top;
-                Width = state.Width;
-                Height = state.Height;
-            }
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = state.Left;
+            Top = state.Top;
+            Width = state.Width;
+            Height = state.Height;
         }
+        if (state.State == System.Windows.WindowState.Maximized)
+            WindowState = System.Windows.WindowState.Maximized;
     }
 
     private void SaveWindowState()
@@ -135,8 +128,7 @@ public partial class MainWindow : Window
             Height = bounds.Height,
             State = WindowState
         };
-        var statePath = Path.Combine(_configManager.AppDataPath, WINDOW_STATE_FILE);
-        _configManager.SaveWindowState(state, statePath);
+        _configManager.SaveWindowState(state, GetWindowStatePath());
     }
 
     private bool IsValidWindowPosition(double left, double top, double width, double height)
@@ -368,47 +360,14 @@ public partial class MainWindow : Window
 
     private void SessionManagerPanel_SessionEditRequested(object? sender, SessionConfiguration session)
     {
-        if (session is SshSessionConfiguration sshConfig)
-        {
-            var dialog = new ConnectionDialog(sshConfig, false, _sessionManager)
-            {
-                Owner = this
-            };
+        if (session is not SshSessionConfiguration sshConfig) return;
 
-            if (dialog.ShowDialog() == true && dialog.Configuration != null)
-            {
-                var newConfig = dialog.Configuration;
-                sshConfig.Host = newConfig.Host;
-                sshConfig.Port = newConfig.Port;
-                sshConfig.Username = newConfig.Username;
-                sshConfig.Password = newConfig.Password;
-                sshConfig.Name = newConfig.Name;
-                sshConfig.UsePasswordAuthentication = newConfig.UsePasswordAuthentication;
-                sshConfig.PrivateKeyPath = newConfig.PrivateKeyPath;
-                sshConfig.PrivateKeyPassphrase = newConfig.PrivateKeyPassphrase;
-                sshConfig.KeepAliveInterval = newConfig.KeepAliveInterval;
-                sshConfig.ConnectionTimeout = newConfig.ConnectionTimeout;
-                sshConfig.CompressionEnabled = newConfig.CompressionEnabled;
-                sshConfig.ResetScrollOnUserInput = newConfig.ResetScrollOnUserInput;
-                sshConfig.ResetScrollOnServerOutput = newConfig.ResetScrollOnServerOutput;
-                sshConfig.ScreenSessionName = newConfig.ScreenSessionName;
-                sshConfig.X11ForwardingEnabled = newConfig.X11ForwardingEnabled;
-                sshConfig.BellNotification = newConfig.BellNotification;
-                sshConfig.Color = newConfig.Color;
-                sshConfig.LineEnding = newConfig.LineEnding;
-                sshConfig.Encoding = newConfig.Encoding;
-                sshConfig.PortForwardingRules = newConfig.PortForwardingRules;
-                sshConfig.FontFamily = newConfig.FontFamily;
-                sshConfig.FontSize = newConfig.FontSize;
-                sshConfig.ForegroundColor = newConfig.ForegroundColor;
-                sshConfig.BackgroundColor = newConfig.BackgroundColor;
-                sshConfig.BackspaceKey = newConfig.BackspaceKey;
-                sshConfig.AutoReconnectMode = newConfig.AutoReconnectMode;
-                sshConfig.GatewaySessionId = newConfig.GatewaySessionId;
-                _sessionManager.UpdateSession(sshConfig);
-                SessionManagerPanel.RefreshAfterEdit();
-            }
-        }
+        var dialog = new ConnectionDialog(sshConfig, false, _sessionManager) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.Configuration is not SshSessionConfiguration newConfig) return;
+
+        sshConfig.ApplyFrom(newConfig);
+        _sessionManager.UpdateSession(sshConfig);
+        SessionManagerPanel.RefreshAfterEdit();
     }
 
     private SshSessionConfiguration CopySessionConfiguration(SshSessionConfiguration source)
@@ -534,15 +493,7 @@ public partial class MainWindow : Window
             else
             {
                 if (removeTabOnFailure)
-                {
-                    await Dispatcher.InvokeAsync(() =>
-                    {
-                        if (TerminalTabs.Items.Contains(tab))
-                        {
-                            TerminalTabs.Items.Remove(tab);
-                        }
-                    });
-                }
+                    await RemoveTabIfPresentAsync(tab);
                 connection?.Dispose();
                 return (false, lastError);
             }
@@ -550,18 +501,19 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             if (removeTabOnFailure)
-            {
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    if (TerminalTabs.Items.Contains(tab))
-                    {
-                        TerminalTabs.Items.Remove(tab);
-                    }
-                });
-            }
+                await RemoveTabIfPresentAsync(tab);
             connection?.Dispose();
             return (false, ex.Message);
         }
+    }
+
+    private async Task RemoveTabIfPresentAsync(TerminalTabItem tab)
+    {
+        await Dispatcher.InvokeAsync(() =>
+        {
+            if (TerminalTabs.Items.Contains(tab))
+                TerminalTabs.Items.Remove(tab);
+        });
     }
 
     internal async void CloseTabMenuItem_Click(object sender, RoutedEventArgs e)
@@ -587,38 +539,16 @@ public partial class MainWindow : Window
         PreviousTab();
     }
 
-    public void NextTab()
+    public void NextTab() => SelectTabByOffset(1);
+    public void PreviousTab() => SelectTabByOffset(-1);
+
+    private void SelectTabByOffset(int offset)
     {
-        if (TerminalTabs.Items.Count == 0)
-        {
-            return;
-        }
-
+        if (TerminalTabs.Items.Count == 0) return;
         var currentIndex = TerminalTabs.SelectedIndex;
-        if (currentIndex < 0)
-        {
-            currentIndex = 0;
-        }
-
-        var nextIndex = (currentIndex + 1) % TerminalTabs.Items.Count;
+        if (currentIndex < 0) currentIndex = offset > 0 ? 0 : TerminalTabs.Items.Count - 1;
+        var nextIndex = (currentIndex + offset + TerminalTabs.Items.Count) % TerminalTabs.Items.Count;
         TerminalTabs.SelectedIndex = nextIndex;
-    }
-
-    public void PreviousTab()
-    {
-        if (TerminalTabs.Items.Count == 0)
-        {
-            return;
-        }
-
-        var currentIndex = TerminalTabs.SelectedIndex;
-        if (currentIndex < 0)
-        {
-            currentIndex = TerminalTabs.Items.Count - 1;
-        }
-
-        var previousIndex = (currentIndex - 1 + TerminalTabs.Items.Count) % TerminalTabs.Items.Count;
-        TerminalTabs.SelectedIndex = previousIndex;
     }
 
     private void ExitMenuItem_Click(object sender, RoutedEventArgs e)

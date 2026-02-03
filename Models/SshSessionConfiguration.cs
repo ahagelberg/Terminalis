@@ -1,3 +1,5 @@
+using System.Linq;
+
 namespace TabbySSH.Models;
 
 public class PortForwardingRule
@@ -50,6 +52,51 @@ public class SshSessionConfiguration : SessionConfiguration
     public SshSessionConfiguration()
     {
         ConnectionType = "SSH";
+    }
+
+    /// <summary>Copies all editable properties from another configuration (e.g. from dialog). Id is preserved.</summary>
+    public void ApplyFrom(SshSessionConfiguration other)
+    {
+        Name = other.Name;
+        Host = other.Host;
+        Port = other.Port;
+        Username = other.Username;
+        Password = other.Password;
+        PrivateKeyPath = other.PrivateKeyPath;
+        PrivateKeyPassphrase = other.PrivateKeyPassphrase;
+        UsePasswordAuthentication = other.UsePasswordAuthentication;
+        KeepAliveInterval = other.KeepAliveInterval;
+        ConnectionTimeout = other.ConnectionTimeout;
+        CompressionEnabled = other.CompressionEnabled;
+        X11ForwardingEnabled = other.X11ForwardingEnabled;
+        BellNotification = other.BellNotification;
+        PortForwardingRules = other.PortForwardingRules.Select(r => new PortForwardingRule
+        {
+            Name = r.Name,
+            IsLocal = r.IsLocal,
+            LocalHost = r.LocalHost,
+            LocalPort = r.LocalPort,
+            RemoteHost = r.RemoteHost,
+            RemotePort = r.RemotePort,
+            Enabled = r.Enabled
+        }).ToList();
+        FontFamily = other.FontFamily;
+        FontSize = other.FontSize;
+        ForegroundColor = other.ForegroundColor;
+        BackgroundColor = other.BackgroundColor;
+        TerminalResizeMethod = other.TerminalResizeMethod;
+        ResetScrollOnUserInput = other.ResetScrollOnUserInput;
+        ResetScrollOnServerOutput = other.ResetScrollOnServerOutput;
+        ScreenSessionName = other.ScreenSessionName;
+        BackspaceKey = other.BackspaceKey;
+        AutoReconnectMode = other.AutoReconnectMode;
+        GatewaySessionId = other.GatewaySessionId;
+        AllowTitleChange = other.AllowTitleChange;
+        Color = other.Color;
+        LineEnding = other.LineEnding;
+        Encoding = other.Encoding;
+        Group = other.Group;
+        Order = other.Order;
     }
 }
 

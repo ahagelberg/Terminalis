@@ -68,28 +68,30 @@ public partial class SessionManagerPanel : UserControl
         }
     }
 
-    private TreeViewItem CreateGroupItem(SessionGroup group)
+    private static StackPanel CreateTreeItemHeader(string text, ImageSource? iconSource)
     {
-        var headerPanel = new StackPanel { Orientation = Orientation.Horizontal };
-        var icon = new WpfImage
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        panel.Children.Add(new WpfImage
         {
-            Source = GetFolderIcon(),
+            Source = iconSource,
             Width = 16,
             Height = 16,
             Margin = new Thickness(0, 0, 5, 0),
             VerticalAlignment = VerticalAlignment.Center
-        };
-        var textBlock = new TextBlock
+        });
+        panel.Children.Add(new TextBlock
         {
-            Text = group.Name,
+            Text = text,
             VerticalAlignment = VerticalAlignment.Center
-        };
-        headerPanel.Children.Add(icon);
-        headerPanel.Children.Add(textBlock);
+        });
+        return panel;
+    }
 
+    private TreeViewItem CreateGroupItem(SessionGroup group)
+    {
         var item = new TreeViewItem
         {
-            Header = headerPanel,
+            Header = CreateTreeItemHeader(group.Name, GetFolderIcon()),
             Tag = group,
             IsExpanded = true
         };
@@ -98,40 +100,18 @@ public partial class SessionManagerPanel : UserControl
         var childSessions = _sessionManager.Sessions.Where(s => s.Group == group.Id).OrderBy(s => s.Order).ThenBy(s => s.Name).ToList();
 
         foreach (var childGroup in childGroups)
-        {
             item.Items.Add(CreateGroupItem(childGroup));
-        }
-
         foreach (var session in childSessions)
-        {
             item.Items.Add(CreateSessionItem(session));
-        }
 
         return item;
     }
 
     private TreeViewItem CreateSessionItem(SessionConfiguration session)
     {
-        var headerPanel = new StackPanel { Orientation = Orientation.Horizontal };
-        var icon = new WpfImage
-        {
-            Source = GetComputerIcon(),
-            Width = 16,
-            Height = 16,
-            Margin = new Thickness(0, 0, 5, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        var textBlock = new TextBlock
-        {
-            Text = session.Name,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        headerPanel.Children.Add(icon);
-        headerPanel.Children.Add(textBlock);
-
         return new TreeViewItem
         {
-            Header = headerPanel,
+            Header = CreateTreeItemHeader(session.Name, GetComputerIcon()),
             Tag = session
         };
     }
@@ -920,43 +900,11 @@ public partial class SessionManagerPanel : UserControl
 
     private void UpdateTreeViewItemHeader(TreeViewItem item, SessionConfiguration session)
     {
-        var headerPanel = new StackPanel { Orientation = Orientation.Horizontal };
-        var icon = new WpfImage
-        {
-            Source = GetComputerIcon(),
-            Width = 16,
-            Height = 16,
-            Margin = new Thickness(0, 0, 5, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        var textBlock = new TextBlock
-        {
-            Text = session.Name,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        headerPanel.Children.Add(icon);
-        headerPanel.Children.Add(textBlock);
-        item.Header = headerPanel;
+        item.Header = CreateTreeItemHeader(session.Name, GetComputerIcon());
     }
 
     private void UpdateTreeViewItemHeader(TreeViewItem item, SessionGroup group)
     {
-        var headerPanel = new StackPanel { Orientation = Orientation.Horizontal };
-        var icon = new WpfImage
-        {
-            Source = GetFolderIcon(),
-            Width = 16,
-            Height = 16,
-            Margin = new Thickness(0, 0, 5, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        var textBlock = new TextBlock
-        {
-            Text = group.Name,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        headerPanel.Children.Add(icon);
-        headerPanel.Children.Add(textBlock);
-        item.Header = headerPanel;
+        item.Header = CreateTreeItemHeader(group.Name, GetFolderIcon());
     }
 }
