@@ -4,7 +4,8 @@
          xmlns:views="clr-namespace:TabbySSH.Views"
          xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
          xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-         mc:Ignorable="d">
+         mc:Ignorable="d"
+         ContextMenuOpening="TerminalTabItem_ContextMenuOpening">
     <TabItem.Style>
         <Style TargetType="TabItem">
             <Setter Property="Template">
@@ -71,6 +72,7 @@
     <TabItem.ContextMenu>
         <ContextMenu>
             <MenuItem Header="Edit Settings..." x:Name="EditSettingsMenuItem" Click="EditSettingsMenuItem_Click"/>
+            <MenuItem Header="Raw mode" x:Name="ShowRawBufferMenuItem" IsCheckable="True" IsChecked="False" Click="ShowRawBufferMenuItem_Click"/>
             <Separator/>
             <MenuItem Header="Reconnect" x:Name="ReconnectMenuItem" Click="ReconnectMenuItem_Click"/>
             <Separator/>

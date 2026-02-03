@@ -38,10 +38,13 @@ public partial class TerminalTabItem : TabItem
     private void TerminalTabItem_ContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
         if (!IsSelected)
-        {
             IsSelected = true;
-        }
         ReconnectMenuItem.IsEnabled = Connection != null && !Connection.IsConnected && SessionConfig != null;
+    }
+
+    private void ShowRawBufferMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        TerminalControl.ShowRawBuffer = ShowRawBufferMenuItem.IsChecked;
     }
 
     public void AttachConnection(ITerminalConnection connection, string? color = null, SshSessionConfiguration? config = null)
@@ -187,9 +190,7 @@ public partial class TerminalTabItem : TabItem
     private void Header_ContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
         if (!IsSelected)
-        {
             IsSelected = true;
-        }
         ReconnectMenuItem.IsEnabled = Connection != null && !Connection.IsConnected && SessionConfig != null;
     }
 

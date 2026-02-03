@@ -321,7 +321,14 @@
                     <ControlTemplate TargetType="MenuItem">
                         <Border x:Name="Border" Background="{DynamicResource MenuBackground}" BorderBrush="Transparent" BorderThickness="0" Padding="0" ClipToBounds="True">
                             <Grid x:Name="MainGrid" Background="{DynamicResource MenuBackground}">
-                                <ContentPresenter x:Name="Header" ContentSource="Header" RecognizesAccessKey="True" Margin="17,1,17,1" VerticalAlignment="Center"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="20"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Path x:Name="CheckMark" Data="M 0,5 L 3.5,8.5 L 9,2" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="0,0,0,0"/>
+                                    <ContentPresenter x:Name="Header" Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" Margin="2,1,17,1" VerticalAlignment="Center"/>
+                                </Grid>
                                 <Popup x:Name="PART_Popup" AllowsTransparency="True" Placement="Bottom" IsOpen="{TemplateBinding IsSubmenuOpen}" PopupAnimation="Fade">
                                     <Border x:Name="SubMenuBorder" Background="{DynamicResource MenuBackground}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1">
                                         <ItemsPresenter x:Name="ItemsPresenter" KeyboardNavigation.DirectionalNavigation="Cycle" Grid.IsSharedSizeScope="True" SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" KeyboardNavigation.TabNavigation="Cycle"/>
@@ -330,6 +337,16 @@
                             </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
+                            <Trigger Property="IsCheckable" Value="True">
+                                <Setter TargetName="CheckMark" Property="Visibility" Value="Collapsed"/>
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsCheckable" Value="True"/>
+                                    <Condition Property="IsChecked" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="CheckMark" Property="Visibility" Value="Visible"/>
+                            </MultiTrigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter Property="Foreground" Value="{DynamicResource MenuHoverForeground}"/>
                             </Trigger>

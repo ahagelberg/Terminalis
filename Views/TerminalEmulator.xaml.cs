@@ -55,6 +55,7 @@ namespace TabbySSH.Views
     private const int DEFAULT_SCROLLBACK_LINES = 20000;
     private const int SCROLL_LINES_PER_TICK = 3;
     private const int ECHO_DETECTION_WINDOW_MS = 100; // Time window to detect echoed user input
+    private const int MAX_RAW_BUFFER_LINES = 5000;
 
     private Vt100Emulator? _emulator;
     private ITerminalConnection? _connection;
@@ -77,6 +78,30 @@ namespace TabbySSH.Views
     private DateTime _lastInputSentTime = DateTime.MinValue;
     private string _backspaceKey = "DEL";
     private bool _allowTitleChange = false;
+    private readonly List<string> _rawBufferLines = new();
+    private readonly System.Text.StringBuilder _rawBufferPending = new();
+
+    public static readonly DependencyProperty ShowRawBufferProperty = DependencyProperty.Register(
+        nameof(ShowRawBuffer), typeof(bool), typeof(TerminalEmulator), new PropertyMetadata(false, OnShowRawBufferChanged));
+
+    private static void OnShowRawBufferChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var terminal = (TerminalEmulator)d;
+        var value = (bool)e.NewValue;
+        if (value && terminal._cursorVisual != null && terminal.TerminalCanvas.Children.Contains(terminal._cursorVisual))
+        {
+            terminal.TerminalCanvas.Children.Remove(terminal._cursorVisual);
+            terminal._cursorVisual = null;
+        }
+        terminal.ClearRenderedLines();
+        terminal.RenderScreen();
+    }
+
+    public bool ShowRawBuffer
+    {
+        get => (bool)GetValue(ShowRawBufferProperty);
+        set => SetValue(ShowRawBufferProperty, value);
+    }
 
     public TerminalEmulator()
     {
@@ -128,6 +153,8 @@ namespace TabbySSH.Views
         _emulator.SetScrollbackLimit(DEFAULT_SCROLLBACK_LINES);
         _emulator.Bell += OnBell;
         _emulator.TitleChanged += OnTitleChanged;
+        _rawBufferLines.Clear();
+        _rawBufferPending.Clear();
 
         InitializeFont(fontFamily ?? "Consolas", fontSize ?? DEFAULT_FONT_SIZE);
 
@@ -401,8 +428,8 @@ namespace TabbySSH.Views
         {
             if (_emulator != null)
             {
+                AppendRawBufferLines(data);
                 _emulator.ProcessData(data);
-                
                 if (_resetScrollOnServerOutput && _scrollOffset > 0)
                 {
                     var timeSinceLastInput = (DateTime.Now - _lastInputSentTime).TotalMilliseconds;
@@ -438,6 +465,44 @@ namespace TabbySSH.Views
     private void OnConnectionClosed(object? sender, ConnectionClosedEventArgs e)
     {
         // Connection closed; handler kept for event subscription. UI updates happen via existing flow.
+    }
+
+    private void AppendRawBufferLines(string data)
+    {
+        _rawBufferPending.Append(data);
+        var full = _rawBufferPending.ToString();
+        _rawBufferPending.Clear();
+        var parts = full.Split('\n');
+        for (int i = 0; i < parts.Length - 1; i++)
+        {
+            _rawBufferLines.Add(parts[i].TrimEnd('\r'));
+            while (_rawBufferLines.Count > MAX_RAW_BUFFER_LINES)
+                _rawBufferLines.RemoveAt(0);
+        }
+        if (parts.Length > 0)
+            _rawBufferPending.Append(parts[parts.Length - 1]);
+    }
+
+    private static string EscapeRawLineForDisplay(string raw)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in raw)
+        {
+            switch (c)
+            {
+                case '\x1B': sb.Append("\\x1B"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\t': sb.Append("\\t"); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\x07': sb.Append("\\a"); break;
+                default:
+                    if (c >= 32 && c < 127) sb.Append(c);
+                    else sb.Append($"\\u{(int)c:X4}");
+                    break;
+            }
+        }
+        return sb.ToString();
     }
 
     private bool _renderPending = false;
@@ -660,6 +725,21 @@ namespace TabbySSH.Views
     // The buffer is only modified by server output via OnDataReceived -> _emulator.ProcessData()
     private TerminalLine? GetLineForRender(int lineIndex)
     {
+        if (ShowRawBuffer)
+        {
+            string rawLine;
+            if (lineIndex < _rawBufferLines.Count)
+                rawLine = _rawBufferLines[lineIndex];
+            else if (lineIndex == _rawBufferLines.Count && _rawBufferPending.Length > 0)
+                rawLine = _rawBufferPending.ToString();
+            else
+                return null;
+            var displayText = EscapeRawLineForDisplay(rawLine);
+            var line = new TerminalLine();
+            foreach (var c in displayText)
+                line.Cells.Add(new TerminalCell { Character = c, ForegroundColor = 7, BackgroundColor = 0 });
+            return line;
+        }
         return _emulator?.GetLine(lineIndex);
     }
 
@@ -679,9 +759,8 @@ namespace TabbySSH.Views
 
     private ViewportRange ComputeViewportRange(int totalLines, int visibleRows)
     {
-        int effectiveLines = _emulator != null && _emulator.InAlternateScreen
-            ? _emulator.Rows
-            : totalLines;
+        int effectiveLines = ShowRawBuffer ? totalLines
+            : (_emulator != null && _emulator.InAlternateScreen ? _emulator.Rows : totalLines);
         if (effectiveLines <= visibleRows)
             return new ViewportRange(0, effectiveLines, 0);
         int start = Math.Max(0, effectiveLines - visibleRows - _scrollOffset);
@@ -695,7 +774,7 @@ namespace TabbySSH.Views
         if (_typeface == null) return;
 
         var totalLines = GetDisplayLineCount();
-        if (totalLines == 0 && _emulator == null) return;
+        if (totalLines == 0 && _emulator == null && !ShowRawBuffer) return;
 
         EnsureSnappedMetrics();
         int visibleRows = GetVisibleRowCount();
@@ -704,11 +783,25 @@ namespace TabbySSH.Views
         int endLineIndex = range.EndLineIndex;
         int viewportOffset = range.ViewportOffset;
 
-        if (_emulator == null)
+        if (ShowRawBuffer)
+        {
+            var viewportWidth = TerminalScrollViewer?.ActualWidth > 0 ? TerminalScrollViewer.ActualWidth : ActualWidth;
+            int maxLen = 0;
+            for (int i = startLineIndex; i < endLineIndex; i++)
+            {
+                string rawLine = i < _rawBufferLines.Count ? _rawBufferLines[i]
+                    : (i == _rawBufferLines.Count && _rawBufferPending.Length > 0 ? _rawBufferPending.ToString() : null);
+                if (rawLine == null) break;
+                var len = EscapeRawLineForDisplay(rawLine).Length;
+                if (len > maxLen) maxLen = len;
+            }
+            TerminalCanvas.Width = Math.Max(viewportWidth, maxLen * _charWidthSnapped);
+        }
+        else if (_emulator == null)
             return;
 
-        var currentCursorRow = _emulator.CursorRow;
-        var currentCursorCol = _emulator.CursorCol;
+        var currentCursorRow = _emulator?.CursorRow ?? 0;
+        var currentCursorCol = _emulator?.CursorCol ?? 0;
         bool viewportChanged = _lastStartLineIndex != startLineIndex || _lastEndLineIndex != endLineIndex || _lastViewportOffset != viewportOffset;
 
         if (viewportChanged)
@@ -719,22 +812,26 @@ namespace TabbySSH.Views
             _lastViewportOffset = viewportOffset;
         }
 
-        var dirtyLines = _emulator.GetDirtyLines();
         bool selectionActive = _hasSelection || _isSelecting;
-        var linesToRender = (viewportChanged || _renderedLines.Count == 0 || selectionActive)
+        bool useFullRange = ShowRawBuffer || viewportChanged || _renderedLines.Count == 0 || selectionActive;
+        var linesToRender = useFullRange
             ? Enumerable.Range(startLineIndex, endLineIndex - startLineIndex).ToHashSet()
-            : dirtyLines;
+            : _emulator!.GetDirtyLines();
 
         foreach (var lineIndex in linesToRender)
         {
             if (lineIndex >= startLineIndex && lineIndex < endLineIndex)
                 RenderLineIncremental(lineIndex, startLineIndex, viewportOffset);
         }
-        _emulator.ClearDirtyLines();
+        if (!ShowRawBuffer)
+            _emulator?.ClearDirtyLines();
 
-        UpdateCursor(currentCursorRow, currentCursorCol, startLineIndex, viewportOffset);
-        _previousCursorRow = currentCursorRow;
-        _previousCursorCol = currentCursorCol;
+        if (!ShowRawBuffer && _emulator != null)
+        {
+            UpdateCursor(currentCursorRow, currentCursorCol, startLineIndex, viewportOffset);
+            _previousCursorRow = currentCursorRow;
+            _previousCursorCol = currentCursorCol;
+        }
     }
 
     private int GetVisibleRowCount()
@@ -2123,6 +2220,8 @@ namespace TabbySSH.Views
 
     private int GetDisplayLineCount()
     {
+        if (ShowRawBuffer)
+            return _rawBufferLines.Count + (_rawBufferPending.Length > 0 ? 1 : 0);
         return _emulator?.LineCount ?? 0;
     }
 
