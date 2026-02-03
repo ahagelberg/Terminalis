@@ -16,7 +16,7 @@
         <ScrollViewer x:Name="TerminalScrollViewer"
                       Grid.Column="0"
                       FlowDirection="LeftToRight"
-                      HorizontalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Hidden"
                       Focusable="False"
                       Background="Black">
@@ -40,8 +40,7 @@
                    Scroll="TerminalScrollBar_Scroll"
                    ValueChanged="TerminalScrollBar_ValueChanged"
                    Cursor="Arrow"
-                   IsHitTestVisible="True"
-                   Visibility="Collapsed"/>
+                   IsHitTestVisible="True"/>
         <Rectangle x:Name="FlashOverlay" 
                    Grid.Column="0"
                    Fill="White" 

@@ -91,7 +91,7 @@ namespace TabbySSH.Views
         PreviewMouseMove += TerminalEmulator_PreviewMouseMove;
         PreviewMouseUp += TerminalEmulator_PreviewMouseUp;
         KeyUp += TerminalEmulator_KeyUp;
-        MouseWheel += TerminalEmulator_MouseWheel;
+        PreviewMouseWheel += TerminalEmulator_PreviewMouseWheel;
         ContextMenuOpening += TerminalEmulator_ContextMenuOpening;
         IsVisibleChanged += TerminalEmulator_IsVisibleChanged;
         ContextMenu = null;
@@ -372,11 +372,8 @@ namespace TabbySSH.Views
         var availableWidth = ActualWidth;
         var availableHeight = ActualHeight;
         
-        // Account for scrollbar if visible
-        if (TerminalScrollBar.Visibility == Visibility.Visible)
-        {
-            availableWidth -= TerminalScrollBar.ActualWidth;
-        }
+        // Vertical scrollbar is always visible (disabled when not needed) so reserve its width
+        availableWidth -= TerminalScrollBar.ActualWidth;
         
         var cols = Math.Max(1, (int)Math.Floor(availableWidth / _charWidth));
         var rows = Math.Max(1, (int)Math.Floor(availableHeight / _charHeight));
@@ -2129,8 +2126,9 @@ namespace TabbySSH.Views
         return _emulator?.LineCount ?? 0;
     }
 
-    private void TerminalEmulator_MouseWheel(object sender, MouseWheelEventArgs e)
+    private void TerminalEmulator_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
+        // Handle wheel before ScrollViewer so our custom scroll offset is used (ScrollViewer would eat the event otherwise)
         if (GetDisplayLineCount() == 0) return;
         if (_hasSelection) ClearSelection();
 
@@ -2192,24 +2190,20 @@ namespace TabbySSH.Views
     {
         if (_emulator == null || _charHeight == 0)
         {
-            TerminalScrollBar.Visibility = Visibility.Collapsed;
+            TerminalScrollBar.IsEnabled = false;
+            TerminalScrollBar.Maximum = 0;
+            TerminalScrollBar.ViewportSize = 0;
+            TerminalScrollBar.Value = 0;
             return;
         }
         int totalLines = GetDisplayLineCount();
         int visibleRows = GetVisibleRowCount();
         int maxScroll = Math.Max(0, totalLines - visibleRows);
-        
-        if (maxScroll > 0 && totalLines > 0)
-        {
-            TerminalScrollBar.Maximum = maxScroll;
-            TerminalScrollBar.ViewportSize = Math.Max(1, visibleRows);
-            TerminalScrollBar.Value = maxScroll - _scrollOffset;
-            TerminalScrollBar.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            TerminalScrollBar.Visibility = Visibility.Collapsed;
-        }
+
+        TerminalScrollBar.Maximum = maxScroll;
+        TerminalScrollBar.ViewportSize = Math.Max(1, visibleRows);
+        TerminalScrollBar.Value = maxScroll - _scrollOffset;
+        TerminalScrollBar.IsEnabled = maxScroll > 0 && totalLines > 0;
     }
     
     private void ApplyScrollOffsetFromScrollBar()
