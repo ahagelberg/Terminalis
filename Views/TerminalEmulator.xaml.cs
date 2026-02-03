@@ -56,7 +56,7 @@ namespace TabbySSH.Views
     private const int SCROLL_LINES_PER_TICK = 3;
     private const int ECHO_DETECTION_WINDOW_MS = 100; // Time window to detect echoed user input
 
-    public Vt100Emulator? _emulator;
+    private Vt100Emulator? _emulator;
     private ITerminalConnection? _connection;
     private Typeface? _typeface;
     private GlyphTypeface? _glyphTypeface;
@@ -231,6 +231,15 @@ namespace TabbySSH.Views
         _dpiCached = true;
         _charHeightSnapped = Math.Round(_charHeight * dpi) / dpi;
         _charWidthSnapped = Math.Round(_charWidth * dpi) / dpi;
+    }
+
+    private void EnsureDpiCached()
+    {
+        if (!_dpiCached)
+        {
+            _cachedDpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            _dpiCached = true;
+        }
     }
 
     public void UpdateSettings(string? lineEnding = null, string? fontFamily = null, double? fontSize = null, string? foregroundColor = null, string? backgroundColor = null, string? bellNotification = null, bool? resetScrollOnUserInput = null, bool? resetScrollOnServerOutput = null, string? backspaceKey = null, bool? allowTitleChange = null)
@@ -431,9 +440,7 @@ namespace TabbySSH.Views
 
     private void OnConnectionClosed(object? sender, ConnectionClosedEventArgs e)
     {
-        Dispatcher.Invoke(() =>
-        {
-        });
+        // Connection closed; handler kept for event subscription. UI updates happen via existing flow.
     }
 
     private bool _renderPending = false;
@@ -474,27 +481,25 @@ namespace TabbySSH.Views
 
     private void OnBell(object? sender, EventArgs e)
     {
-        var currentSetting = _bellNotification;
+        var setting = _bellNotification;
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (string.Equals(currentSetting, "Sound", StringComparison.OrdinalIgnoreCase))
+            switch (setting?.ToLowerInvariant())
             {
-                System.Media.SystemSounds.Beep.Play();
-            }
-            else if (string.Equals(currentSetting, "Flash", StringComparison.OrdinalIgnoreCase))
-            {
-                FlashWindow();
-            }
-            else if (string.Equals(currentSetting, "Line Flash", StringComparison.OrdinalIgnoreCase))
-            {
-                FlashCurrentLine();
-            }
-            else if (string.Equals(currentSetting, "None", StringComparison.OrdinalIgnoreCase))
-            {
-            }
-            else
-            {
-                FlashWindow();
+                case "sound":
+                    System.Media.SystemSounds.Beep.Play();
+                    break;
+                case "flash":
+                    FlashWindow();
+                    break;
+                case "line flash":
+                    FlashCurrentLine();
+                    break;
+                case "none":
+                    break;
+                default:
+                    FlashWindow();
+                    break;
             }
         }));
     }
@@ -542,43 +547,22 @@ namespace TabbySSH.Views
         }));
     }
 
-    private Color GetBackgroundColor()
+    private static Color ParseColorOrDefault(string? colorName, Color defaultColor)
     {
-        if (!string.IsNullOrEmpty(_customBackgroundColor))
+        if (string.IsNullOrEmpty(colorName)) return defaultColor;
+        try
         {
-            try
-            {
-                var brush = new BrushConverter().ConvertFromString(_customBackgroundColor) as SolidColorBrush;
-                if (brush != null)
-                {
-                    return brush.Color;
-                }
-            }
-            catch
-            {
-            }
+            var brush = new BrushConverter().ConvertFromString(colorName) as SolidColorBrush;
+            return brush?.Color ?? defaultColor;
         }
-        return Colors.Black;
+        catch
+        {
+            return defaultColor;
+        }
     }
 
-    private Color GetForegroundColor()
-    {
-        if (!string.IsNullOrEmpty(_customForegroundColor))
-        {
-            try
-            {
-                var brush = new BrushConverter().ConvertFromString(_customForegroundColor) as SolidColorBrush;
-                if (brush != null)
-                {
-                    return brush.Color;
-                }
-            }
-            catch
-            {
-            }
-        }
-        return Colors.LightGray;
-    }
+    private Color GetBackgroundColor() => ParseColorOrDefault(_customBackgroundColor, Colors.Black);
+    private Color GetForegroundColor() => ParseColorOrDefault(_customForegroundColor, Colors.LightGray);
 
     private void FlashTab()
     {
@@ -682,95 +666,55 @@ namespace TabbySSH.Views
         return _emulator?.GetLine(lineIndex);
     }
 
+    private readonly struct ViewportRange
+    {
+        public int StartLineIndex { get; }
+        public int EndLineIndex { get; }
+        public int ViewportOffset { get; }
+
+        public ViewportRange(int start, int end, int offset)
+        {
+            StartLineIndex = start;
+            EndLineIndex = end;
+            ViewportOffset = offset;
+        }
+    }
+
+    private ViewportRange ComputeViewportRange(int totalLines, int visibleRows)
+    {
+        int effectiveLines = _emulator != null && _emulator.InAlternateScreen
+            ? _emulator.Rows
+            : totalLines;
+        if (effectiveLines <= visibleRows)
+            return new ViewportRange(0, effectiveLines, 0);
+        int start = Math.Max(0, effectiveLines - visibleRows - _scrollOffset);
+        int end = Math.Min(effectiveLines, start + visibleRows);
+        int offset = _scrollOffset == 0 ? visibleRows - (end - start) : 0;
+        return new ViewportRange(start, end, offset);
+    }
+
     private void RenderScreen()
     {
-        if (_typeface == null)
-        {
-            return;
-        }
+        if (_typeface == null) return;
 
         var totalLines = GetDisplayLineCount();
-        if (totalLines == 0)
-        {
-            if (_emulator == null) return;
-        }
+        if (totalLines == 0 && _emulator == null) return;
 
         EnsureSnappedMetrics();
+        int visibleRows = GetVisibleRowCount();
+        var range = ComputeViewportRange(totalLines, visibleRows);
+        int startLineIndex = range.StartLineIndex;
+        int endLineIndex = range.EndLineIndex;
+        int viewportOffset = range.ViewportOffset;
 
-        var visibleRows = Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
-        int startLineIndex = 0;
-        int endLineIndex = 0;
-        int viewportOffset = 0;
-
-        if (_emulator != null)
-        {
-            var currentCursorRow = _emulator.CursorRow;
-            var currentCursorCol = _emulator.CursorCol;
-            if (_emulator.InAlternateScreen)
-            {
-                var rows = _emulator.Rows;
-                if (totalLines <= visibleRows)
-                {
-                    startLineIndex = 0;
-                    endLineIndex = totalLines;
-                }
-                else
-                {
-                    startLineIndex = Math.Max(0, rows - visibleRows - _scrollOffset);
-                    endLineIndex = Math.Min(rows, startLineIndex + visibleRows);
-                    if (_scrollOffset == 0)
-                    {
-                        viewportOffset = visibleRows - (endLineIndex - startLineIndex);
-                    }
-                }
-            }
-            else if (totalLines <= visibleRows)
-            {
-                startLineIndex = 0;
-                endLineIndex = totalLines;
-            }
-            else
-            {
-                startLineIndex = Math.Max(0, totalLines - visibleRows - _scrollOffset);
-                endLineIndex = Math.Min(totalLines, startLineIndex + visibleRows);
-                if (_scrollOffset == 0)
-                {
-                    viewportOffset = visibleRows - (endLineIndex - startLineIndex);
-                }
-            }
-
-            bool viewportChanged = _lastStartLineIndex != startLineIndex || _lastEndLineIndex != endLineIndex || _lastViewportOffset != viewportOffset;
-            if (viewportChanged)
-            {
-                HandleViewportChange(startLineIndex, endLineIndex, viewportOffset, visibleRows);
-                _lastStartLineIndex = startLineIndex;
-                _lastEndLineIndex = endLineIndex;
-                _lastViewportOffset = viewportOffset;
-            }
-
-            var dirtyLines = _emulator.GetDirtyLines();
-            bool selectionActive = _hasSelection || _isSelecting;
-            var linesToRender = (viewportChanged || _renderedLines.Count == 0 || selectionActive) ?
-                Enumerable.Range(startLineIndex, endLineIndex - startLineIndex).ToHashSet() :
-                dirtyLines;
-
-            foreach (var lineIndex in linesToRender)
-            {
-                if (lineIndex >= startLineIndex && lineIndex < endLineIndex)
-                {
-                    RenderLineIncremental(lineIndex, startLineIndex, viewportOffset);
-                }
-            }
-            _emulator.ClearDirtyLines();
-
-            UpdateCursor(currentCursorRow, currentCursorCol, startLineIndex, viewportOffset);
-            _previousCursorRow = currentCursorRow;
-            _previousCursorCol = currentCursorCol;
+        if (_emulator == null)
             return;
-        }
 
-        bool rawViewportChanged = _lastStartLineIndex != startLineIndex || _lastEndLineIndex != endLineIndex || _lastViewportOffset != viewportOffset;
-        if (rawViewportChanged)
+        var currentCursorRow = _emulator.CursorRow;
+        var currentCursorCol = _emulator.CursorCol;
+        bool viewportChanged = _lastStartLineIndex != startLineIndex || _lastEndLineIndex != endLineIndex || _lastViewportOffset != viewportOffset;
+
+        if (viewportChanged)
         {
             HandleViewportChange(startLineIndex, endLineIndex, viewportOffset, visibleRows);
             _lastStartLineIndex = startLineIndex;
@@ -778,10 +722,27 @@ namespace TabbySSH.Views
             _lastViewportOffset = viewportOffset;
         }
 
-        for (var lineIndex = startLineIndex; lineIndex < endLineIndex; lineIndex++)
+        var dirtyLines = _emulator.GetDirtyLines();
+        bool selectionActive = _hasSelection || _isSelecting;
+        var linesToRender = (viewportChanged || _renderedLines.Count == 0 || selectionActive)
+            ? Enumerable.Range(startLineIndex, endLineIndex - startLineIndex).ToHashSet()
+            : dirtyLines;
+
+        foreach (var lineIndex in linesToRender)
         {
-            RenderLineIncremental(lineIndex, startLineIndex, viewportOffset);
+            if (lineIndex >= startLineIndex && lineIndex < endLineIndex)
+                RenderLineIncremental(lineIndex, startLineIndex, viewportOffset);
         }
+        _emulator.ClearDirtyLines();
+
+        UpdateCursor(currentCursorRow, currentCursorCol, startLineIndex, viewportOffset);
+        _previousCursorRow = currentCursorRow;
+        _previousCursorCol = currentCursorCol;
+    }
+
+    private int GetVisibleRowCount()
+    {
+        return Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
     }
 
     private void HandleViewportChange(int startLineIndex, int endLineIndex, int viewportOffset, int visibleRows)
@@ -860,9 +821,9 @@ namespace TabbySSH.Views
         }
 
         // Only show cursor when at bottom (scrollOffset == 0) and cursor is visible
-        var visibleRowsForCursor = Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
-        if (_scrollOffset == 0 && cursorRow >= 0 && _emulator != null && _emulator.CursorVisible && 
-            cursorRow >= startLineIndex && cursorRow < startLineIndex + visibleRowsForCursor)
+        int visibleRows = GetVisibleRowCount();
+        if (_scrollOffset == 0 && cursorRow >= 0 && _emulator != null && _emulator.CursorVisible &&
+            cursorRow >= startLineIndex && cursorRow < startLineIndex + visibleRows)
         {
             var drawingVisual = new DrawingVisual();
             DrawingContext? dc = null;
@@ -1254,13 +1215,7 @@ namespace TabbySSH.Views
             
             if (glyphCount > 0)
             {
-                // Cache DPI value to avoid repeated calls
-                if (!_dpiCached)
-                {
-                    _cachedDpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-                    _dpiCached = true;
-                }
-                
+                EnsureDpiCached();
                 var glyphRun = new GlyphRun(
                     _glyphTypeface,
                     0,
@@ -1281,12 +1236,7 @@ namespace TabbySSH.Views
             }
             else
             {
-                // Plain text but no glyphs in font (e.g. some box-drawing); draw with FormattedText so it appears
-                if (!_dpiCached)
-                {
-                    _cachedDpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-                    _dpiCached = true;
-                }
+                EnsureDpiCached();
                 var formattedText = new FormattedText(
                     text,
                     CultureInfo.CurrentCulture,
@@ -1308,12 +1258,7 @@ namespace TabbySSH.Views
         }
         else
         {
-            // Fallback to FormattedText for styled text
-            if (!_dpiCached)
-            {
-                _cachedDpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-                _dpiCached = true;
-            }
+            EnsureDpiCached();
             var formattedText = new FormattedText(
                 text,
                 CultureInfo.CurrentCulture,
@@ -1343,146 +1288,15 @@ namespace TabbySSH.Views
 
     private int GetLineIndexAtViewportRow(int viewportRow)
     {
-        if (_emulator == null)
-        {
-            return 0;
-        }
-        
+        if (_emulator == null) return 0;
+
         var totalLines = _emulator.LineCount;
-        // Calculate number of complete lines that fit in viewport (no partial lines)
-        var visibleRows = (int)(ActualHeight / _charHeight);
-        
-        int startLineIndex;
-        int viewportOffset = 0;
-        
-        if (_emulator.InAlternateScreen)
-        {
-            // Alternate screen: when buffer is larger than viewport and scrollOffset == 0, fix last line at bottom
-            var rows = _emulator.Rows;
-            if (totalLines <= visibleRows)
-            {
-                startLineIndex = 0;
-            }
-            else
-            {
-                startLineIndex = Math.Max(0, rows - visibleRows - _scrollOffset);
-                if (_scrollOffset == 0)
-                {
-                    var endLineIndex = Math.Min(rows, startLineIndex + visibleRows);
-                    viewportOffset = visibleRows - (endLineIndex - startLineIndex);
-                }
-            }
-        }
-        else if (totalLines <= visibleRows)
-        {
-            startLineIndex = 0;
-        }
-        else
-        {
-            startLineIndex = Math.Max(0, totalLines - visibleRows - _scrollOffset);
-            if (_scrollOffset == 0)
-            {
-                var endLineIndex = Math.Min(totalLines, startLineIndex + visibleRows);
-                viewportOffset = visibleRows - (endLineIndex - startLineIndex);
-            }
-        }
-        
-        // Adjust viewportRow by offset to get actual line index
-        var adjustedViewportRow = viewportRow - viewportOffset;
-        if (adjustedViewportRow < 0)
-        {
-            return 0; // Above visible area
-        }
-        
-        return Math.Min(startLineIndex + adjustedViewportRow, totalLines - 1);
-    }
+        int visibleRows = Math.Max(1, (int)(ActualHeight / _charHeight));
+        var range = ComputeViewportRange(totalLines, visibleRows);
 
-    // Read-only: only reads cursor position from buffer, never modifies it
-    private void RenderCursor(DrawingContext dc)
-    {
-        if (_emulator == null || _typeface == null || dc == null)
-        {
-            return;
-        }
-
-        var cursorLineIndex = _emulator.CursorRow;
-        var cursorCol = _emulator.CursorCol;
-        
-        // Calculate viewport position for cursor
-        var totalLines = _emulator.LineCount;
-        // Calculate number of complete lines that fit in viewport (no partial lines)
-        var visibleRows = (int)(ActualHeight / _charHeight);
-        
-        int startLineIndex;
-        int viewportOffset = 0;
-        
-        if (_emulator.InAlternateScreen)
-        {
-            // Alternate screen: when buffer is larger than viewport and scrollOffset == 0, fix last line at bottom
-            var rows = _emulator.Rows;
-            if (totalLines <= visibleRows)
-            {
-                startLineIndex = 0;
-            }
-            else
-            {
-                startLineIndex = Math.Max(0, rows - visibleRows - _scrollOffset);
-                if (_scrollOffset == 0)
-                {
-                    var endLineIndex = Math.Min(rows, startLineIndex + visibleRows);
-                    viewportOffset = visibleRows - (endLineIndex - startLineIndex);
-                }
-            }
-        }
-        else if (totalLines <= visibleRows)
-        {
-            startLineIndex = 0;
-        }
-        else
-        {
-            startLineIndex = Math.Max(0, totalLines - visibleRows - _scrollOffset);
-            if (_scrollOffset == 0)
-            {
-                var endLineIndex = Math.Min(totalLines, startLineIndex + visibleRows);
-                viewportOffset = visibleRows - (endLineIndex - startLineIndex);
-            }
-        }
-        
-        // Only render cursor if it's in the visible range and at bottom (scrollOffset == 0)
-        if (_scrollOffset != 0 || cursorLineIndex < startLineIndex || cursorLineIndex >= startLineIndex + visibleRows)
-        {
-            return;
-        }
-        
-        // Check if cursor column is within viewport width
-        var viewportWidth = TerminalCanvas.ActualWidth > 0 ? TerminalCanvas.ActualWidth : ActualWidth;
-        var visibleCols = (int)(viewportWidth / _charWidth);
-        if (visibleCols <= 0 || cursorCol >= visibleCols)
-        {
-            return;
-        }
-
-        var viewportRow = (cursorLineIndex - startLineIndex) + viewportOffset;
-        var x = cursorCol * _charWidthSnapped;
-        var y = viewportRow * _charHeightSnapped;
-
-        var cell = _emulator.GetCell(cursorLineIndex, cursorCol);
-        var fg = cell.Reverse ? cell.BackgroundColor : cell.ForegroundColor;
-        var bg = cell.Reverse ? cell.ForegroundColor : cell.BackgroundColor;
-
-        var foregroundBrush = GetColor(fg);
-        var foregroundColor = foregroundBrush is SolidColorBrush fgSolid ? fgSolid.Color : Colors.White;
-
-        var underlineRect = new Rectangle
-        {
-            Width = _charWidthSnapped,
-            Height = 2,
-            Fill = foregroundBrush
-        };
-        Canvas.SetLeft(underlineRect, x);
-        Canvas.SetTop(underlineRect, y + _charHeightSnapped - 2);
-        Canvas.SetZIndex(underlineRect, 1000);
-        TerminalCanvas.Children.Add(underlineRect);
+        int adjustedViewportRow = viewportRow - range.ViewportOffset;
+        if (adjustedViewportRow < 0) return 0;
+        return Math.Min(range.StartLineIndex + adjustedViewportRow, totalLines - 1);
     }
 
     private Brush GetColor(int colorIndex)
@@ -1525,20 +1339,6 @@ namespace TabbySSH.Views
         }
         else if (colorIndex >= 16 && colorIndex <= 255)
         {
-            // 256-color palette
-            brush = Get256Color(colorIndex);
-        }
-        else if ((colorIndex & 0x1000000) != 0)
-        {
-            // RGB color: 0x1000000 | (r << 16) | (g << 8) | b
-            var r = (byte)((colorIndex >> 16) & 0xFF);
-            var g = (byte)((colorIndex >> 8) & 0xFF);
-            var b = (byte)(colorIndex & 0xFF);
-            brush = new SolidColorBrush(Color.FromRgb(r, g, b));
-        }
-        else if (colorIndex >= 16 && colorIndex <= 255)
-        {
-            // 256-color palette
             brush = Get256Color(colorIndex);
         }
         else
@@ -1598,36 +1398,36 @@ namespace TabbySSH.Views
         return Brushes.White;
     }
 
+    private static bool IsMouseOverScrollBar(DependencyObject? source)
+    {
+        if (source is Thumb or RepeatButton or ScrollBar) return true;
+        return source != null && FindParent<ScrollBar>(source) != null;
+    }
+
+    private bool IsPointOverCanvas(Point pos)
+    {
+        return pos.X >= 0 && pos.Y >= 0 &&
+               pos.X <= TerminalCanvas.ActualWidth && pos.Y <= TerminalCanvas.ActualHeight;
+    }
+
     private void TerminalEmulator_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        // Don't handle clicks on the scrollbar or its parts
-        var source = e.OriginalSource;
-        if (source is Thumb || 
-            source is RepeatButton ||
-            source is ScrollBar)
-        {
+        if (IsMouseOverScrollBar(e.OriginalSource as DependencyObject))
             return;
-        }
-        
-        var sourceDependencyObject = source as DependencyObject;
-        if (sourceDependencyObject != null && FindParent<ScrollBar>(sourceDependencyObject) != null)
-        {
-            return;
-        }
-        
+
         if (e.LeftButton == MouseButtonState.Pressed)
         {
-            // Check if click is over the Canvas
             var pos = e.GetPosition(TerminalCanvas);
-            if (pos.X >= 0 && pos.Y >= 0 && pos.X <= TerminalCanvas.ActualWidth && pos.Y <= TerminalCanvas.ActualHeight && _emulator != null && _charWidth > 0 && _charHeight > 0)
-            {
-                Focus();
+            if (!IsPointOverCanvas(pos) || _emulator == null || _charWidth <= 0 || _charHeight <= 0)
+                return;
+
+            Focus();
                 
                 // If there's already a selection and we're clicking, copy it (PuTTY behavior)
                 if (_hasSelection && !_isSelecting)
                 {
                     CopySelectionToClipboard();
-            ClearSelection();
+                    ClearSelection();
                     _hasSelection = false;
                 }
                 
@@ -1667,18 +1467,14 @@ namespace TabbySSH.Views
                 CaptureMouse();
                 Cursor = Cursors.IBeam;
                 e.Handled = true;
-            }
         }
         else if (e.RightButton == MouseButtonState.Pressed)
         {
-            // Always handle right-click to prevent context menu from appearing
             var pos = e.GetPosition(TerminalCanvas);
-            if (pos.X >= 0 && pos.Y >= 0 && pos.X <= TerminalCanvas.ActualWidth && pos.Y <= TerminalCanvas.ActualHeight)
+            if (IsPointOverCanvas(pos))
             {
                 if (!_isSelecting && !_hasSelection)
-            {
-                PasteFromClipboard();
-                }
+                    PasteFromClipboard();
                 e.Handled = true;
             }
         }
@@ -1686,15 +1482,8 @@ namespace TabbySSH.Views
     
     private void TerminalEmulator_MouseDown(object sender, MouseButtonEventArgs e)
     {
-        // Handle right-click at MouseDown level to prevent context menu
-        if (e.RightButton == MouseButtonState.Pressed)
-        {
-            var pos = e.GetPosition(TerminalCanvas);
-            if (pos.X >= 0 && pos.Y >= 0 && pos.X <= TerminalCanvas.ActualWidth && pos.Y <= TerminalCanvas.ActualHeight)
-            {
-                e.Handled = true;
-            }
-        }
+        if (e.RightButton == MouseButtonState.Pressed && IsPointOverCanvas(e.GetPosition(TerminalCanvas)))
+            e.Handled = true;
     }
     
     private void TerminalEmulator_ContextMenuOpening(object sender, ContextMenuEventArgs e)
@@ -1705,21 +1494,9 @@ namespace TabbySSH.Views
 
     private void TerminalEmulator_PreviewMouseMove(object sender, MouseEventArgs e)
     {
-        // Don't handle mouse move over the scrollbar or its parts
-        var source = e.OriginalSource;
-        if (source is Thumb || 
-            source is RepeatButton ||
-            source is ScrollBar)
-        {
+        if (IsMouseOverScrollBar(e.OriginalSource as DependencyObject))
             return;
-        }
-        
-        var sourceDependencyObject = source as DependencyObject;
-        if (sourceDependencyObject != null && FindParent<ScrollBar>(sourceDependencyObject) != null)
-        {
-            return;
-        }
-        
+
         if (_isSelecting && e.LeftButton == MouseButtonState.Pressed && _emulator != null && _charWidth > 0 && _charHeight > 0)
         {
             var pos = e.GetPosition(TerminalCanvas);
@@ -1764,12 +1541,9 @@ namespace TabbySSH.Views
                 
                 // Only mark as having selection if there's actual area selected
                 if (endRow > startRow || (endRow == startRow && endCol > startCol))
-                {
                     _hasSelection = true;
-            }
                 else
                 {
-                    // Just a click, clear selection
                     ClearSelection();
                     _hasSelection = false;
                 }
@@ -2357,32 +2131,21 @@ namespace TabbySSH.Views
 
     private void TerminalEmulator_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (GetDisplayLineCount() == 0)
-        {
-            return;
-        }
+        if (GetDisplayLineCount() == 0) return;
+        if (_hasSelection) ClearSelection();
 
-        // Clear selection when scrolling
-        if (_hasSelection)
-        {
-            ClearSelection();
-        }
-
-        // Scroll by SCROLL_LINES_PER_TICK lines per wheel tick
-        // e.Delta > 0 means scroll up (see older content), e.Delta < 0 means scroll down (see newer content)
-        var delta = e.Delta > 0 ? SCROLL_LINES_PER_TICK : -SCROLL_LINES_PER_TICK;
-        var totalLines = GetDisplayLineCount();
-        var visibleRows = Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
-        var maxScroll = Math.Max(0, totalLines - visibleRows);
-        var newScrollOffset = Math.Max(0, Math.Min(_scrollOffset + delta, maxScroll));
+        int delta = e.Delta > 0 ? SCROLL_LINES_PER_TICK : -SCROLL_LINES_PER_TICK;
+        int totalLines = GetDisplayLineCount();
+        int visibleRows = GetVisibleRowCount();
+        int maxScroll = Math.Max(0, totalLines - visibleRows);
+        int newScrollOffset = Math.Max(0, Math.Min(_scrollOffset + delta, maxScroll));
         if (newScrollOffset != _scrollOffset)
         {
             _scrollOffset = newScrollOffset;
             UpdateScrollBar();
             UpdateCanvasTransform();
-            // Render immediately for responsive scrolling, don't throttle
-        RenderScreen();
-    }
+            RenderScreen();
+        }
         e.Handled = true;
     }
     
@@ -2432,10 +2195,9 @@ namespace TabbySSH.Views
             TerminalScrollBar.Visibility = Visibility.Collapsed;
             return;
         }
-        
-        var totalLines = GetDisplayLineCount();
-        var visibleRows = Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
-        var maxScroll = Math.Max(0, totalLines - visibleRows);
+        int totalLines = GetDisplayLineCount();
+        int visibleRows = GetVisibleRowCount();
+        int maxScroll = Math.Max(0, totalLines - visibleRows);
         
         if (maxScroll > 0 && totalLines > 0)
         {
@@ -2450,44 +2212,27 @@ namespace TabbySSH.Views
         }
     }
     
+    private void ApplyScrollOffsetFromScrollBar()
+    {
+        if (GetDisplayLineCount() == 0) return;
+        int totalLines = GetDisplayLineCount();
+        int visibleRows = GetVisibleRowCount();
+        int maxScroll = Math.Max(0, totalLines - visibleRows);
+        int newScrollOffset = maxScroll - (int)TerminalScrollBar.Value;
+        if (newScrollOffset == _scrollOffset) return;
+        _scrollOffset = newScrollOffset;
+        UpdateCanvasTransform();
+        RenderScreen();
+    }
+
     private void TerminalScrollBar_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (GetDisplayLineCount() == 0)
-        {
-            return;
-        }
-        
-        var totalLines = GetDisplayLineCount();
-        var visibleRows = Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
-        var maxScroll = Math.Max(0, totalLines - visibleRows);
-        var newScrollOffset = maxScroll - (int)e.NewValue;
-        
-        if (newScrollOffset != _scrollOffset)
-        {
-            _scrollOffset = newScrollOffset;
-            UpdateCanvasTransform();
-            RenderScreen();
-        }
+        ApplyScrollOffsetFromScrollBar();
     }
-    
+
     private void TerminalScrollBar_Scroll(object sender, ScrollEventArgs e)
     {
-        if (GetDisplayLineCount() == 0)
-        {
-            return;
-        }
-        
-        var totalLines = GetDisplayLineCount();
-        var visibleRows = Math.Max(1, (int)(ActualHeight / _charHeightSnapped));
-        var maxScroll = Math.Max(0, totalLines - visibleRows);
-        var newScrollOffset = maxScroll - (int)TerminalScrollBar.Value;
-        
-        if (newScrollOffset != _scrollOffset)
-        {
-            _scrollOffset = newScrollOffset;
-            UpdateCanvasTransform();
-            RenderScreen();
-        }
+        ApplyScrollOffsetFromScrollBar();
     }
     
 
