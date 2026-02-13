@@ -1662,6 +1662,16 @@ namespace TabbySSH.Views
         return Brushes.White;
     }
 
+    /// <summary>Column index from X position using "past halfway" rule: a character is included only when the mouse is past the midpoint of that character. Returns 0..maxColInclusive+1 so the last character is selectable when past its midpoint.</summary>
+    private static int GetSelectionColumnFromX(double posX, double charWidthSnapped, int maxColInclusive)
+    {
+        if (charWidthSnapped <= 0)
+            return 0;
+        // Past halfway of column c when posX >= (c + 0.5) * width, so c = floor(posX/width - 0.5). Store as exclusive end: col = floor(posX/width - 0.5) + 1.
+        int col = (int)Math.Floor(posX / charWidthSnapped - 0.5) + 1;
+        return Math.Max(0, Math.Min(maxColInclusive + 1, col));
+    }
+
     private static bool IsMouseOverScrollBar(DependencyObject? source)
     {
         if (source is Thumb or RepeatButton or ScrollBar) return true;
@@ -1699,11 +1709,13 @@ namespace TabbySSH.Views
             var lineIndex = GetLineIndexAtViewportRow(viewportRow);
             var line = GetLineForRender(lineIndex);
             var maxCol = line != null ? Math.Max(0, line.Cells.Count - 1) : 0;
-            var col = Math.Max(0, Math.Min(maxCol, (int)Math.Round(pos.X / _charWidthSnapped)));
+            var col = GetSelectionColumnFromX(pos.X, _charWidthSnapped, maxCol);
 
             if (e.ClickCount == 2)
             {
-                SelectWordAt(lineIndex, col);
+                // SelectWordAt expects a cell index (0..maxCol); col is in exclusive-end form (0..maxCol+1)
+                int cellIndex = col > 0 ? Math.Min(maxCol, col - 1) : 0;
+                SelectWordAt(lineIndex, cellIndex);
                 e.Handled = true;
                 return;
             }
@@ -1765,7 +1777,7 @@ namespace TabbySSH.Views
             var lineIndex = GetLineIndexAtViewportRow(viewportRow);
             var line = GetLineForRender(lineIndex);
             var maxCol = line != null ? Math.Max(0, line.Cells.Count - 1) : 0;
-            var col = Math.Max(0, Math.Min(maxCol, (int)Math.Round(pos.X / _charWidthSnapped)));
+            var col = GetSelectionColumnFromX(pos.X, _charWidthSnapped, maxCol);
             if (_selectionEndRow != lineIndex || _selectionEndCol != col)
             {
                 _selectionEndRow = lineIndex;
@@ -1794,7 +1806,7 @@ namespace TabbySSH.Views
             var lineIndex = GetLineIndexAtViewportRow(viewportRow);
             var line = GetLineForRender(lineIndex);
             var maxCol = line != null ? Math.Max(0, line.Cells.Count - 1) : 0;
-            var col = Math.Max(0, Math.Min(maxCol, (int)Math.Round(pos.X / _charWidthSnapped)));
+            var col = GetSelectionColumnFromX(pos.X, _charWidthSnapped, maxCol);
             _selectionEndRow = lineIndex;
             _selectionEndCol = col;
 
