@@ -1278,7 +1278,8 @@ public class Vt100Emulator
             int regionSize = scrollBottom - scrollTop + 1;
             count = Math.Min(count, regionSize);
             
-            for (int i = scrollBottom - count; i >= scrollTop; i--)
+            // Copy upward: each line gets content from line below (iterate top-to-bottom so we never read overwritten data)
+            for (int i = scrollTop; i <= scrollBottom - count; i++)
             {
                 CopyLineCells(_lines[i + count], _lines[i]);
                 MarkLineDirty(i);
@@ -1383,12 +1384,15 @@ public class Vt100Emulator
             int maxDelete = scrollBottom - cursorRow + 1;
             count = Math.Min(count, maxDelete);
             
-            for (int i = scrollBottom - count; i >= cursorRow; i--)
+            // Copy upward: line below replaces current (iterate top-to-bottom so we never read overwritten data)
+            for (int i = cursorRow; i <= scrollBottom - count; i++)
             {
                 CopyLineCells(_lines[i + count], _lines[i]);
+                MarkLineDirty(i);
+                MarkLineDirty(i + count);
             }
             
-            // Clear the lines at the bottom of scroll region that were copied from
+            // Clear the lines at the bottom of scroll region that were vacated
             for (int i = scrollBottom - count + 1; i <= scrollBottom; i++)
             {
                 if (i >= scrollTop && i <= scrollBottom && i >= 0 && i < _lines.Count)
