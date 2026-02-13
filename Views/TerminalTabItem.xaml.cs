@@ -24,6 +24,7 @@ public partial class TerminalTabItem : TabItem
 
     private bool _isDragging = false;
     private Point _dragStartPoint;
+    private RawOutputWindow? _rawOutputWindow;
 
     public TerminalTabItem()
     {
@@ -42,9 +43,19 @@ public partial class TerminalTabItem : TabItem
         ReconnectMenuItem.IsEnabled = Connection != null && !Connection.IsConnected && SessionConfig != null;
     }
 
-    private void ShowRawBufferMenuItem_Click(object sender, RoutedEventArgs e)
+    private void ShowRawOutputMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        TerminalControl.ShowRawBuffer = ShowRawBufferMenuItem.IsChecked;
+        if (_rawOutputWindow != null)
+        {
+            _rawOutputWindow.Activate();
+            return;
+        }
+        _rawOutputWindow = new RawOutputWindow(TerminalControl, ConnectionName);
+        _rawOutputWindow.Closed += (_, _) => _rawOutputWindow = null;
+        var owner = Window.GetWindow(this);
+        if (owner != null)
+            _rawOutputWindow.Owner = owner;
+        _rawOutputWindow.Show();
     }
 
     public void AttachConnection(ITerminalConnection connection, string? color = null, SshSessionConfiguration? config = null)

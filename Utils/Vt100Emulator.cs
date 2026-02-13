@@ -390,6 +390,11 @@ public class Vt100Emulator
         {
             ProcessInsertCharacter(p, command);
         }
+        // Process Erase Character (X) command - ECH
+        else if (final == 'X')
+        {
+            ProcessEraseCharacter(p);
+        }
         else
         {
             var paramStr = p.Count > 0 ? string.Join(";", p) : "";
@@ -643,6 +648,71 @@ public class Vt100Emulator
     {
         line.Cells.Clear();
         _writeCol = 0;
+        MarkLineDirty(line);
+    }
+
+    private void ProcessEraseCharacter(List<int> parameters)
+    {
+        // ECH (Erase Character) - ESC [ Ps X
+        // Erase Ps character positions at the cursor (default 1). Replace with space using current SGR. Cursor does not move.
+        int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
+        if (_currentLineIndex < 0 || _currentLineIndex >= _lines.Count)
+            return;
+        var line = _lines[_currentLineIndex];
+        // Ensure line has at least cursor + count cells (extend with spaces if needed)
+        int endCol = _writeCol + count;
+        while (line.Cells.Count < endCol)
+        {
+            line.Cells.Add(new TerminalCell
+            {
+                Character = ' ',
+                ForegroundColor = _foregroundColor,
+                BackgroundColor = _backgroundColor,
+                Bold = _bold,
+                Faint = _faint,
+                Italic = _italic,
+                Underline = _underline,
+                Blink = _blink,
+                Reverse = _reverse,
+                Conceal = _conceal,
+                CrossedOut = _crossedOut,
+                DoubleUnderline = _doubleUnderline,
+                Overline = _overline
+            });
+        }
+        var blankCell = new TerminalCell
+        {
+            Character = ' ',
+            ForegroundColor = _foregroundColor,
+            BackgroundColor = _backgroundColor,
+            Bold = _bold,
+            Faint = _faint,
+            Italic = _italic,
+            Underline = _underline,
+            Blink = _blink,
+            Reverse = _reverse,
+            Conceal = _conceal,
+            CrossedOut = _crossedOut,
+            DoubleUnderline = _doubleUnderline,
+            Overline = _overline
+        };
+        for (int i = 0; i < count && _writeCol + i < line.Cells.Count; i++)
+        {
+            var c = line.Cells[_writeCol + i];
+            c.Character = blankCell.Character;
+            c.ForegroundColor = blankCell.ForegroundColor;
+            c.BackgroundColor = blankCell.BackgroundColor;
+            c.Bold = blankCell.Bold;
+            c.Faint = blankCell.Faint;
+            c.Italic = blankCell.Italic;
+            c.Underline = blankCell.Underline;
+            c.Blink = blankCell.Blink;
+            c.Reverse = blankCell.Reverse;
+            c.Conceal = blankCell.Conceal;
+            c.CrossedOut = blankCell.CrossedOut;
+            c.DoubleUnderline = blankCell.DoubleUnderline;
+            c.Overline = blankCell.Overline;
+        }
         MarkLineDirty(line);
     }
 
@@ -1398,21 +1468,22 @@ public class Vt100Emulator
         // Deletes Ps characters at the cursor position (default 1)
         // Characters to the right shift left
         int count = parameters.Count > 0 && parameters[0] > 0 ? parameters[0] : 1;
-        
-        
+
+
         if (_currentLineIndex >= 0 && _currentLineIndex < _lines.Count)
         {
             var line = _lines[_currentLineIndex];
-            
+
             // Delete characters by shifting left
             if (_writeCol < line.Cells.Count)
             {
                 int deleteCount = Math.Min(count, line.Cells.Count - _writeCol);
                 line.Cells.RemoveRange(_writeCol, deleteCount);
+                MarkLineDirty(line);
             }
         }
-        
-        
+
+
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
 
@@ -1471,9 +1542,10 @@ public class Vt100Emulator
                     Overline = blankCell.Overline
                 });
             }
+            MarkLineDirty(line);
         }
-        
-        
+
+
         // Don't fire events - ScreenChanged will be fired at end of ProcessData
     }
 

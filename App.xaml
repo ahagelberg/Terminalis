@@ -95,6 +95,7 @@
                                 CornerRadius="2">
                             <ScrollViewer x:Name="PART_ContentHost" 
                                           Focusable="False" 
+                                          FlowDirection="LeftToRight"
                                           HorizontalScrollBarVisibility="Hidden" 
                                           VerticalScrollBarVisibility="Hidden"/>
                         </Border>
@@ -177,6 +178,7 @@
                                 CornerRadius="2">
                             <ScrollViewer x:Name="PART_ContentHost" 
                                           Focusable="False" 
+                                          FlowDirection="LeftToRight"
                                           HorizontalScrollBarVisibility="Hidden" 
                                           VerticalScrollBarVisibility="Hidden"/>
                         </Border>
@@ -389,7 +391,7 @@
                                 <RowDefinition MaxHeight="18"/>
                             </Grid.RowDefinitions>
                             <Border Grid.Row="1" Background="{DynamicResource ScrollBarBackground}" Margin="1,0,1,0"/>
-                            <Track x:Name="PART_Track" Grid.Row="1" IsDirectionReversed="True" Focusable="False">
+                            <Track x:Name="PART_Track" Grid.Row="1" Focusable="False">
                                 <Track.DecreaseRepeatButton>
                                     <RepeatButton Style="{StaticResource ScrollBarButtonStyle}" Command="ScrollBar.PageUpCommand" Focusable="False"/>
                                 </Track.DecreaseRepeatButton>
@@ -404,7 +406,11 @@
                             <RepeatButton x:Name="PART_LineDownButton" Grid.Row="2" Command="ScrollBar.LineDownCommand" Style="{StaticResource ScrollBarButtonStyle}" Focusable="False"/>
                         </Grid>
                         <ControlTemplate.Triggers>
+                            <Trigger Property="Orientation" Value="Vertical">
+                                <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="True"/>
+                            </Trigger>
                             <Trigger Property="Orientation" Value="Horizontal">
+                                <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False"/>
                                 <Setter TargetName="GridRoot" Property="LayoutTransform">
                                     <Setter.Value>
                                         <RotateTransform Angle="-90"/>

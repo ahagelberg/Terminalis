@@ -72,7 +72,7 @@
     <TabItem.ContextMenu>
         <ContextMenu>
             <MenuItem Header="Edit Settings..." x:Name="EditSettingsMenuItem" Click="EditSettingsMenuItem_Click"/>
-            <MenuItem Header="Raw mode" x:Name="ShowRawBufferMenuItem" IsCheckable="True" IsChecked="False" Click="ShowRawBufferMenuItem_Click"/>
+            <MenuItem Header="Show raw output" x:Name="ShowRawOutputMenuItem" Click="ShowRawOutputMenuItem_Click"/>
             <Separator/>
             <MenuItem Header="Reconnect" x:Name="ReconnectMenuItem" Click="ReconnectMenuItem_Click"/>
             <Separator/>

@@ -56,6 +56,10 @@ namespace TabbySSH.Views
     private const int SCROLL_LINES_PER_TICK = 3;
     private const int ECHO_DETECTION_WINDOW_MS = 100; // Time window to detect echoed user input
     private const int MAX_RAW_BUFFER_LINES = 5000;
+    /// <summary>Max length of a single raw buffer line to avoid freeze when server sends no newlines (e.g. alt-screen binary/escape stream).</summary>
+    private const int MAX_RAW_LINE_LENGTH = 65536;
+    /// <summary>WPF GlyphRun allows at most 65535 glyphs; chunk long lines to avoid ArgumentException.</summary>
+    private const int MAX_GLYPH_RUN_CHARS = 60000;
 
     private Vt100Emulator? _emulator;
     private ITerminalConnection? _connection;
@@ -80,28 +84,15 @@ namespace TabbySSH.Views
     private bool _allowTitleChange = false;
     private readonly List<string> _rawBufferLines = new();
     private readonly System.Text.StringBuilder _rawBufferPending = new();
+    private readonly object _rawBufferLock = new object();
 
-    public static readonly DependencyProperty ShowRawBufferProperty = DependencyProperty.Register(
-        nameof(ShowRawBuffer), typeof(bool), typeof(TerminalEmulator), new PropertyMetadata(false, OnShowRawBufferChanged));
+    /// <summary>Coalesce received data so one UI callback processes all pending data (avoids freeze when server sends burst e.g. alt-screen).</summary>
+    private readonly System.Text.StringBuilder _pendingProcessData = new System.Text.StringBuilder();
+    private bool _processScheduled;
+    private readonly object _pendingProcessLock = new object();
 
-    private static void OnShowRawBufferChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-    {
-        var terminal = (TerminalEmulator)d;
-        var value = (bool)e.NewValue;
-        if (value && terminal._cursorVisual != null && terminal.TerminalCanvas.Children.Contains(terminal._cursorVisual))
-        {
-            terminal.TerminalCanvas.Children.Remove(terminal._cursorVisual);
-            terminal._cursorVisual = null;
-        }
-        terminal.ClearRenderedLines();
-        terminal.RenderScreen();
-    }
-
-    public bool ShowRawBuffer
-    {
-        get => (bool)GetValue(ShowRawBufferProperty);
-        set => SetValue(ShowRawBufferProperty, value);
-    }
+    /// <summary>Raised when raw buffer is appended (on receiving thread). Subscribe to update a raw output window.</summary>
+    public event EventHandler? RawBufferUpdated;
 
     public TerminalEmulator()
     {
@@ -153,8 +144,11 @@ namespace TabbySSH.Views
         _emulator.SetScrollbackLimit(DEFAULT_SCROLLBACK_LINES);
         _emulator.Bell += OnBell;
         _emulator.TitleChanged += OnTitleChanged;
-        _rawBufferLines.Clear();
-        _rawBufferPending.Clear();
+        lock (_rawBufferLock)
+        {
+            _rawBufferLines.Clear();
+            _rawBufferPending.Clear();
+        }
 
         InitializeFont(fontFamily ?? "Consolas", fontSize ?? DEFAULT_FONT_SIZE);
 
@@ -438,42 +432,58 @@ namespace TabbySSH.Views
 
     private void OnDataReceived(object? sender, string data)
     {
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        // Append to raw buffer immediately on receiving thread so raw mode keeps updating.
+        AppendRawBufferLines(data);
+
+        // Coalesce: one UI callback drains all pending data (avoids freeze when server sends burst e.g. alt-screen).
+        bool shouldSchedule = false;
+        lock (_pendingProcessLock)
         {
-            if (_emulator != null)
+            _pendingProcessData.Append(data);
+            if (!_processScheduled)
             {
-                AppendRawBufferLines(data);
-                _emulator.ProcessData(data);
-                if (_resetScrollOnServerOutput && _scrollOffset > 0)
-                {
-                    var timeSinceLastInput = (DateTime.Now - _lastInputSentTime).TotalMilliseconds;
-                    if (timeSinceLastInput > ECHO_DETECTION_WINDOW_MS)
-                    {
-                        ResetScrollPosition();
-                    }
-                }
-                
-                // Update canvas height to accommodate scrollback
-                UpdateCanvasHeight();
-                
-                // Auto-scroll to bottom if user is already at bottom (scrollOffset == 0)
-                if (_scrollOffset == 0)
-                {
-                    UpdateCanvasTransform();
-                }
-                
-                // Batch renders - only queue one render at a time
-                if (!_renderPending)
-                {
-                    _renderPending = true;
-                    Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
-                    {
-                        _renderPending = false;
-                        RenderScreen();
-                    }));
-                }
+                _processScheduled = true;
+                shouldSchedule = true;
             }
-        }));
+        }
+        if (shouldSchedule)
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(ProcessPendingData));
+    }
+
+    private void ProcessPendingData()
+    {
+        string toProcess;
+        lock (_pendingProcessLock)
+        {
+            toProcess = _pendingProcessData.ToString();
+            _pendingProcessData.Clear();
+            _processScheduled = false;
+        }
+
+        if (_emulator == null || toProcess.Length == 0) return;
+
+        _emulator.ProcessData(toProcess);
+
+        if (_resetScrollOnServerOutput && _scrollOffset > 0)
+        {
+            var timeSinceLastInput = (DateTime.Now - _lastInputSentTime).TotalMilliseconds;
+            if (timeSinceLastInput > ECHO_DETECTION_WINDOW_MS)
+                ResetScrollPosition();
+        }
+
+        UpdateCanvasHeight();
+        if (_scrollOffset == 0)
+            UpdateCanvasTransform();
+
+        if (!_renderPending)
+        {
+            _renderPending = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+            {
+                _renderPending = false;
+                RenderScreen();
+            }));
+        }
     }
 
     private void OnConnectionClosed(object? sender, ConnectionClosedEventArgs e)
@@ -481,23 +491,55 @@ namespace TabbySSH.Views
         // Connection closed; handler kept for event subscription. UI updates happen via existing flow.
     }
 
+    /// <summary>Thread-safe: append received data to the raw buffer. Callable from any thread.</summary>
     private void AppendRawBufferLines(string data)
     {
-        _rawBufferPending.Append(data);
-        var full = _rawBufferPending.ToString();
-        _rawBufferPending.Clear();
-        var parts = full.Split('\n');
-        for (int i = 0; i < parts.Length - 1; i++)
+        lock (_rawBufferLock)
         {
-            _rawBufferLines.Add(parts[i].TrimEnd('\r'));
-            while (_rawBufferLines.Count > MAX_RAW_BUFFER_LINES)
-                _rawBufferLines.RemoveAt(0);
+            _rawBufferPending.Append(data);
+            var full = _rawBufferPending.ToString();
+            _rawBufferPending.Clear();
+            var parts = full.Split('\n');
+            for (int i = 0; i < parts.Length - 1; i++)
+            {
+                AddRawLine(parts[i].TrimEnd('\r'));
+            }
+            if (parts.Length > 0)
+                _rawBufferPending.Append(parts[parts.Length - 1]);
+
+            // Cap pending line length so one line can't grow unbounded (e.g. alt-screen with no newlines).
+            while (_rawBufferPending.Length > MAX_RAW_LINE_LENGTH)
+            {
+                var chunk = new System.Text.StringBuilder(MAX_RAW_LINE_LENGTH);
+                for (int i = 0; i < MAX_RAW_LINE_LENGTH; i++)
+                    chunk.Append(_rawBufferPending[i]);
+                _rawBufferPending.Remove(0, MAX_RAW_LINE_LENGTH);
+                AddRawLine(chunk.ToString());
+            }
         }
-        if (parts.Length > 0)
-            _rawBufferPending.Append(parts[parts.Length - 1]);
+        RawBufferUpdated?.Invoke(this, EventArgs.Empty);
     }
 
-    private static string EscapeRawLineForDisplay(string raw)
+    /// <summary>Thread-safe snapshot of raw buffer for the raw output window.</summary>
+    public (IReadOnlyList<string> lines, string pending) GetRawBufferSnapshot()
+    {
+        lock (_rawBufferLock)
+        {
+            var lines = new List<string>(_rawBufferLines);
+            var pending = _rawBufferPending.ToString();
+            return (lines, pending);
+        }
+    }
+
+    private void AddRawLine(string line)
+    {
+        _rawBufferLines.Add(line);
+        while (_rawBufferLines.Count > MAX_RAW_BUFFER_LINES)
+            _rawBufferLines.RemoveAt(0);
+    }
+
+    /// <summary>Escape control characters for display in raw output window. Public for RawOutputWindow.</summary>
+    public static string EscapeRawLineForDisplay(string raw)
     {
         var sb = new System.Text.StringBuilder();
         foreach (var c in raw)
@@ -745,21 +787,6 @@ namespace TabbySSH.Views
     // The buffer is only modified by server output via OnDataReceived -> _emulator.ProcessData()
     private TerminalLine? GetLineForRender(int lineIndex)
     {
-        if (ShowRawBuffer)
-        {
-            string rawLine;
-            if (lineIndex < _rawBufferLines.Count)
-                rawLine = _rawBufferLines[lineIndex];
-            else if (lineIndex == _rawBufferLines.Count && _rawBufferPending.Length > 0)
-                rawLine = _rawBufferPending.ToString();
-            else
-                return null;
-            var displayText = EscapeRawLineForDisplay(rawLine);
-            var line = new TerminalLine();
-            foreach (var c in displayText)
-                line.Cells.Add(new TerminalCell { Character = c, ForegroundColor = 7, BackgroundColor = 0 });
-            return line;
-        }
         return _emulator?.GetLine(lineIndex);
     }
 
@@ -779,8 +806,7 @@ namespace TabbySSH.Views
 
     private ViewportRange ComputeViewportRange(int totalLines, int visibleRows)
     {
-        int effectiveLines = ShowRawBuffer ? totalLines
-            : (_emulator != null && _emulator.InAlternateScreen ? _emulator.Rows : totalLines);
+        int effectiveLines = _emulator != null && _emulator.InAlternateScreen ? _emulator.Rows : totalLines;
         if (effectiveLines <= visibleRows)
             return new ViewportRange(0, effectiveLines, 0);
         int start = Math.Max(0, effectiveLines - visibleRows - _scrollOffset);
@@ -794,7 +820,7 @@ namespace TabbySSH.Views
         if (_typeface == null) return;
 
         var totalLines = GetDisplayLineCount();
-        if (totalLines == 0 && _emulator == null && !ShowRawBuffer) return;
+        if (totalLines == 0) return;
 
         EnsureSnappedMetrics();
         int visibleRows = GetVisibleRowCount();
@@ -803,22 +829,16 @@ namespace TabbySSH.Views
         int endLineIndex = range.EndLineIndex;
         int viewportOffset = range.ViewportOffset;
 
-        if (ShowRawBuffer)
+        // Canvas width: same logic for both modes - max visible line length
+        var viewportWidth = TerminalScrollViewer?.ActualWidth > 0 ? TerminalScrollViewer.ActualWidth : ActualWidth;
+        int maxLen = 0;
+        for (int i = startLineIndex; i < endLineIndex; i++)
         {
-            var viewportWidth = TerminalScrollViewer?.ActualWidth > 0 ? TerminalScrollViewer.ActualWidth : ActualWidth;
-            int maxLen = 0;
-            for (int i = startLineIndex; i < endLineIndex; i++)
-            {
-                string rawLine = i < _rawBufferLines.Count ? _rawBufferLines[i]
-                    : (i == _rawBufferLines.Count && _rawBufferPending.Length > 0 ? _rawBufferPending.ToString() : null);
-                if (rawLine == null) break;
-                var len = EscapeRawLineForDisplay(rawLine).Length;
-                if (len > maxLen) maxLen = len;
-            }
-            TerminalCanvas.Width = Math.Max(viewportWidth, maxLen * _charWidthSnapped);
+            var line = GetLineForRender(i);
+            if (line != null && line.Cells.Count > maxLen)
+                maxLen = line.Cells.Count;
         }
-        else if (_emulator == null)
-            return;
+        TerminalCanvas.Width = Math.Max(viewportWidth, maxLen * _charWidthSnapped);
 
         var currentCursorRow = _emulator?.CursorRow ?? 0;
         var currentCursorCol = _emulator?.CursorCol ?? 0;
@@ -833,20 +853,19 @@ namespace TabbySSH.Views
         }
 
         bool selectionActive = _hasSelection || _isSelecting;
-        bool useFullRange = ShowRawBuffer || viewportChanged || _renderedLines.Count == 0 || selectionActive;
+        bool useFullRange = viewportChanged || _renderedLines.Count == 0 || selectionActive;
         var linesToRender = useFullRange
             ? Enumerable.Range(startLineIndex, endLineIndex - startLineIndex).ToHashSet()
-            : _emulator!.GetDirtyLines();
+            : (_emulator?.GetDirtyLines() ?? Enumerable.Empty<int>().ToHashSet());
 
         foreach (var lineIndex in linesToRender)
         {
             if (lineIndex >= startLineIndex && lineIndex < endLineIndex)
                 RenderLineIncremental(lineIndex, startLineIndex, viewportOffset);
         }
-        if (!ShowRawBuffer)
-            _emulator?.ClearDirtyLines();
+        _emulator?.ClearDirtyLines();
 
-        if (!ShowRawBuffer && _emulator != null)
+        if (_emulator != null)
         {
             UpdateCursor(currentCursorRow, currentCursorCol, startLineIndex, viewportOffset);
             _previousCursorRow = currentCursorRow;
@@ -944,20 +963,21 @@ namespace TabbySSH.Views
             try
             {
                 dc = drawingVisual.RenderOpen();
-                
-                // Render cursor at y=0 relative to DrawingVisual (positioning handled by Canvas.SetTop)
-                var x = cursorCol * _charWidthSnapped;
-                var y = _charHeightSnapped - 2; // Position within the line (underline at bottom)
 
-                var cell = _emulator.GetCell(cursorRow, cursorCol);
-                var fg = cell.Reverse ? cell.BackgroundColor : cell.ForegroundColor;
-                var bg = cell.Reverse ? cell.ForegroundColor : cell.BackgroundColor;
+                var x = cursorCol * _charWidthSnapped;
+                var y = _charHeightSnapped - 2; // underline at bottom of line
+
+                // Use same data source as rendering (raw buffer or emulator)
+                int fg = 7, bg = 0;
+                var line = GetLineForRender(cursorRow);
+                if (line != null && cursorCol >= 0 && cursorCol < line.Cells.Count)
+                {
+                    var cell = line.Cells[cursorCol];
+                    fg = cell.Reverse ? cell.BackgroundColor : cell.ForegroundColor;
+                    bg = cell.Reverse ? cell.ForegroundColor : cell.BackgroundColor;
+                }
 
                 var foregroundBrush = GetColor(fg);
-                var backgroundBrush = GetColor(bg);
-                var foregroundColor = foregroundBrush is SolidColorBrush fgSolid ? fgSolid.Color : Colors.White;
-
-                // Draw underline cursor
                 var underlineRect = new Rect(x, y, _charWidthSnapped, 2);
                 dc.DrawRectangle(foregroundBrush, null, underlineRect);
             }
@@ -1310,46 +1330,54 @@ namespace TabbySSH.Views
         // Use GlyphRun for faster rendering if available, otherwise fall back to FormattedText
         if (_glyphTypeface != null && !bold && !italic && !underline && !overline && !crossedOut && !doubleUnderline)
         {
-            // Fast path: use GlyphRun for plain text
-            // Use fixed advance width per character so box-drawing and all Unicode render in a strict grid
-            var textLength = text.Length;
-            var glyphIndices = new ushort[textLength];
-            var advanceWidths = new double[textLength];
-            int glyphCount = 0;
+            // Fast path: use GlyphRun for plain text. Chunk to avoid GlyphRun's 65535 glyph limit.
+            double currentX = x;
+            int offset = 0;
+            while (offset < text.Length)
+            {
+                int chunkLen = Math.Min(MAX_GLYPH_RUN_CHARS, text.Length - offset);
+                var chunk = text.Substring(offset, chunkLen);
+                var glyphIndices = new ushort[chunkLen];
+                var advanceWidths = new double[chunkLen];
+                int glyphCount = 0;
 
-            foreach (var ch in text)
-            {
-                if (_glyphTypeface.CharacterToGlyphMap.TryGetValue(ch, out var glyphIndex))
+                foreach (var ch in chunk)
                 {
-                    glyphIndices[glyphCount] = glyphIndex;
-                    advanceWidths[glyphCount] = _charWidthSnapped;
-                    glyphCount++;
+                    if (_glyphTypeface.CharacterToGlyphMap.TryGetValue(ch, out var glyphIndex))
+                    {
+                        glyphIndices[glyphCount] = glyphIndex;
+                        advanceWidths[glyphCount] = _charWidthSnapped;
+                        glyphCount++;
+                    }
                 }
+
+                if (glyphCount > 0)
+                {
+                    EnsureDpiCached();
+                    var glyphRun = new GlyphRun(
+                        _glyphTypeface,
+                        0,
+                        false,
+                        _fontSize,
+                        (float)_cachedDpi,
+                        glyphIndices,
+                        new Point(currentX, y + _glyphTypeface.Baseline * _fontSize),
+                        advanceWidths,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null);
+
+                    dc.DrawGlyphRun(foreground, glyphRun);
+                }
+                currentX += chunkLen * _charWidthSnapped;
+                offset += chunkLen;
             }
-            
-            if (glyphCount > 0)
+            if (offset == 0)
             {
-                EnsureDpiCached();
-                var glyphRun = new GlyphRun(
-                    _glyphTypeface,
-                    0,
-                    false,
-                    _fontSize,
-                    (float)_cachedDpi,
-                    glyphIndices,
-                    new Point(x, y + _glyphTypeface.Baseline * _fontSize),
-                    advanceWidths,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null);
-                
-                dc.DrawGlyphRun(foreground, glyphRun);
-            }
-            else
-            {
+                // No glyphs mapped (e.g. replacement chars only) - fall back to FormattedText
                 EnsureDpiCached();
                 var formattedText = new FormattedText(
                     text,
@@ -1402,15 +1430,15 @@ namespace TabbySSH.Views
 
     private int GetLineIndexAtViewportRow(int viewportRow)
     {
-        if (_emulator == null) return 0;
+        var totalLines = GetDisplayLineCount();
+        if (totalLines == 0) return 0;
 
-        var totalLines = _emulator.LineCount;
         int visibleRows = Math.Max(1, (int)(ActualHeight / _charHeight));
         var range = ComputeViewportRange(totalLines, visibleRows);
 
         int adjustedViewportRow = viewportRow - range.ViewportOffset;
         if (adjustedViewportRow < 0) return 0;
-        return Math.Min(range.StartLineIndex + adjustedViewportRow, totalLines - 1);
+        return Math.Min(range.StartLineIndex + adjustedViewportRow, Math.Max(0, totalLines - 1));
     }
 
     private Brush GetColor(int colorIndex)
@@ -1532,7 +1560,7 @@ namespace TabbySSH.Views
         if (e.LeftButton == MouseButtonState.Pressed)
         {
             var pos = e.GetPosition(TerminalCanvas);
-            if (!IsPointOverCanvas(pos) || _emulator == null || _charWidth <= 0 || _charHeight <= 0)
+            if (!IsPointOverCanvas(pos) || _charWidth <= 0 || _charHeight <= 0 || GetDisplayLineCount() == 0)
                 return;
 
             Focus();
@@ -1545,11 +1573,11 @@ namespace TabbySSH.Views
                     _hasSelection = false;
                 }
                 
-                // Calculate cell position
+                // Calculate cell position (works for both normal and raw mode)
                 var viewportRow = Math.Max(0, (int)(pos.Y / _charHeightSnapped));
                 var lineIndex = GetLineIndexAtViewportRow(viewportRow);
-                var line = _emulator.GetLine(lineIndex);
-                var maxCol = line != null ? Math.Max(0, line.Cells.Count - 1) : _emulator.Cols - 1;
+                var line = GetLineForRender(lineIndex);
+                var maxCol = line != null ? Math.Max(0, line.Cells.Count - 1) : 0;
                 var col = Math.Max(0, Math.Min(maxCol, (int)(pos.X / _charWidthSnapped)));
                 
                 // Handle double-click (word selection) and triple-click (line selection)
@@ -1611,13 +1639,13 @@ namespace TabbySSH.Views
         if (IsMouseOverScrollBar(e.OriginalSource as DependencyObject))
             return;
 
-        if (_isSelecting && e.LeftButton == MouseButtonState.Pressed && _emulator != null && _charWidth > 0 && _charHeight > 0)
+        if (_isSelecting && e.LeftButton == MouseButtonState.Pressed && _charWidth > 0 && _charHeight > 0)
         {
             var pos = e.GetPosition(TerminalCanvas);
             var viewportRow = Math.Max(0, (int)(pos.Y / _charHeight));
             var lineIndex = GetLineIndexAtViewportRow(viewportRow);
-            var line = _emulator.GetLine(lineIndex);
-            var maxCol = line != null ? Math.Max(0, line.Cells.Count - 1) : _emulator.Cols - 1;
+            var line = GetLineForRender(lineIndex);
+            var maxCol = line != null ? Math.Max(0, line.Cells.Count - 1) : 0;
             var col = Math.Max(0, Math.Min(maxCol, (int)(pos.X / _charWidth)));
             
             if (_selectionEndRow != lineIndex || _selectionEndCol != col)
@@ -1676,67 +1704,59 @@ namespace TabbySSH.Views
         _hasSelection = false;
     }
 
+    private char GetCellCharacter(int lineIndex, int col)
+    {
+        var line = GetLineForRender(lineIndex);
+        if (line == null || col < 0 || col >= line.Cells.Count)
+            return ' ';
+        return line.Cells[col].Character;
+    }
+
     private void SelectWordAt(int lineIndex, int col)
     {
-        if (_emulator == null) return;
-        
-        var line = _emulator.GetLine(lineIndex);
+        var line = GetLineForRender(lineIndex);
         if (line == null) return;
-        
-        var cell = _emulator.GetCell(lineIndex, col);
-        
-        // Check if we're on a word character (non-whitespace)
-        bool isWordChar = !char.IsWhiteSpace(cell.Character);
-        
+
+        var ch = col < line.Cells.Count ? line.Cells[col].Character : ' ';
+        bool isWordChar = !char.IsWhiteSpace(ch);
+
         int startCol = col;
         int endCol = col;
-        
+
         if (isWordChar)
         {
-            // Find start of word (go left until we hit whitespace or start of line)
             while (startCol > 0)
             {
-                var leftCell = _emulator.GetCell(lineIndex, startCol - 1);
-                if (char.IsWhiteSpace(leftCell.Character))
-                {
+                if (char.IsWhiteSpace(GetCellCharacter(lineIndex, startCol - 1)))
                     break;
-                }
                 startCol--;
             }
-            
-            // Find end of word (go right until we hit whitespace or end of line)
             while (endCol < line.Cells.Count - 1)
             {
-                var rightCell = _emulator.GetCell(lineIndex, endCol + 1);
-                if (char.IsWhiteSpace(rightCell.Character))
-                {
+                if (char.IsWhiteSpace(GetCellCharacter(lineIndex, endCol + 1)))
                     break;
-                }
                 endCol++;
             }
-            endCol++; // Include the last character
+            endCol++;
         }
         else
         {
-            // If on whitespace, select just that character
             endCol++;
         }
-        
+
         _selectionStartRow = lineIndex;
         _selectionStartCol = startCol;
         _selectionEndRow = lineIndex;
         _selectionEndCol = endCol;
         _hasSelection = true;
         _isSelecting = false;
-        
+
         RenderScreen();
     }
-    
+
     private void SelectLineAt(int lineIndex)
     {
-        if (_emulator == null) return;
-        
-        var line = _emulator.GetLine(lineIndex);
+        var line = GetLineForRender(lineIndex);
         var lineLength = line != null ? line.Cells.Count : 0;
         
         // Select entire line from column 0 to end
@@ -1753,10 +1773,12 @@ namespace TabbySSH.Views
     private void CopySelectionToClipboard()
     {
         if (!_selectionStartRow.HasValue || !_selectionStartCol.HasValue ||
-            !_selectionEndRow.HasValue || !_selectionEndCol.HasValue || _emulator == null)
+            !_selectionEndRow.HasValue || !_selectionEndCol.HasValue)
         {
             return;
         }
+        if (_emulator == null)
+            return;
 
         var topRow = Math.Min(_selectionStartRow.Value, _selectionEndRow.Value);
         var bottomRow = Math.Max(_selectionStartRow.Value, _selectionEndRow.Value);
@@ -1766,7 +1788,7 @@ namespace TabbySSH.Views
         var selectedText = new System.Text.StringBuilder();
         for (int lineIndex = topRow; lineIndex <= bottomRow; lineIndex++)
         {
-            var line = _emulator.GetLine(lineIndex);
+            var line = GetLineForRender(lineIndex);
             if (line == null) continue;
             
             var lineText = new System.Text.StringBuilder();
@@ -2240,8 +2262,6 @@ namespace TabbySSH.Views
 
     private int GetDisplayLineCount()
     {
-        if (ShowRawBuffer)
-            return _rawBufferLines.Count + (_rawBufferPending.Length > 0 ? 1 : 0);
         return _emulator?.LineCount ?? 0;
     }
 
