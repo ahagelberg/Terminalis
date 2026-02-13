@@ -2001,6 +2001,13 @@ namespace TabbySSH.Views
                 var text = Clipboard.GetText();
                 if (!string.IsNullOrEmpty(text))
                 {
+                    // Normalize line endings: Windows clipboard uses CRLF (\r\n). Sending \r\n to a Unix
+                    // terminal can show as an extra line break because both \r and \n may be interpreted.
+                    // Use a single newline per line (optionally the configured line ending).
+                    text = text.Replace("\r\n", "\n").Replace("\r", "\n");
+                    if (_lineEnding != "\n")
+                        text = text.Replace("\n", _lineEnding);
+
                     // Clear selection and redraw so any existing highlight is gone before new text appears
                     ClearSelection();
                     RenderScreen();
