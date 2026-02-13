@@ -237,20 +237,13 @@ public partial class MainWindow : Window
             TerminalTabs.SelectedItem = tabs[0].tab;
             UpdateTitleBarColor();
 
-            foreach (var item in tabs)
+            var connectTasks = tabs.Select(async item =>
             {
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    TerminalTabs.SelectedItem = item.tab;
-                });
-                await Dispatcher.InvokeAsync(new Action(() => { }), System.Windows.Threading.DispatcherPriority.Loaded);
                 try
                 {
                     var (connected, error) = await ConnectSessionAsync(item.tab, item.config, removeTabOnFailure: true);
                     if (!connected)
-                    {
                         System.Diagnostics.Debug.WriteLine($"Error connecting session {item.config.Id}: {error ?? "Unknown error"}");
-                    }
                 }
                 catch (Exception ex)
                 {
@@ -258,26 +251,21 @@ public partial class MainWindow : Window
                     await Dispatcher.InvokeAsync(() =>
                     {
                         if (TerminalTabs.Items.Contains(item.tab))
-                        {
                             TerminalTabs.Items.Remove(item.tab);
-                        }
                     });
                 }
-            }
+            }).ToList();
+
+            await Task.WhenAll(connectTasks);
 
             await Dispatcher.InvokeAsync(() =>
             {
                 if (tabs.Count > 0 && TerminalTabs.Items.Contains(tabs[0].tab))
-                {
                     TerminalTabs.SelectedItem = tabs[0].tab;
-                }
                 UpdateTitleBarColor();
+                if (TerminalTabs.Items.Count > 0)
+                    StatusTextBlock.Text = $"Restored {tabs.Count} session(s)";
             });
-
-            if (tabs.Count > 0 && TerminalTabs.Items.Count > 0)
-            {
-                StatusTextBlock.Text = $"Restored {tabs.Count} session(s)";
-            }
         }
     }
 
@@ -337,7 +325,7 @@ public partial class MainWindow : Window
         }
     }
 
-    internal async void NewTabMenuItem_Click(object sender, RoutedEventArgs e)
+    internal void NewTabMenuItem_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new ConnectionDialog(_sessionManager)
         {
@@ -346,15 +334,15 @@ public partial class MainWindow : Window
 
         if (dialog.ShowDialog() == true && dialog.Configuration != null)
         {
-            await CreateNewTab(dialog.Configuration);
+            CreateNewTab(dialog.Configuration);
         }
     }
 
-    private async void SessionManagerPanel_SessionSelected(object? sender, SessionConfiguration session)
+    private void SessionManagerPanel_SessionSelected(object? sender, SessionConfiguration session)
     {
         if (session is SshSessionConfiguration sshConfig)
         {
-            await CreateNewTab(sshConfig);
+            CreateNewTab(sshConfig);
         }
     }
 
@@ -417,47 +405,49 @@ public partial class MainWindow : Window
         };
     }
 
-    private async Task CreateNewTab(SshSessionConfiguration config)
+    private void CreateNewTab(SshSessionConfiguration config)
     {
         StatusTextBlock.Text = "Connecting...";
 
-        try
-        {
-            var existingSession = _sessionManager.GetSession(config.Id);
-            if (existingSession == null && !string.IsNullOrEmpty(config.Name))
-            {
-                _sessionManager.AddSession(config);
-            }
+        var existingSession = _sessionManager.GetSession(config.Id);
+        if (existingSession == null && !string.IsNullOrEmpty(config.Name))
+            _sessionManager.AddSession(config);
 
-            var activeConfig = CopySessionConfiguration(config);
-            var tab = new TerminalTabItem();
-            TerminalTabs.Items.Add(tab);
-            TerminalTabs.SelectedItem = tab;
-            UpdateTitleBarColor();
+        var activeConfig = CopySessionConfiguration(config);
+        var tab = new TerminalTabItem();
+        TerminalTabs.Items.Add(tab);
+        TerminalTabs.SelectedItem = tab;
+        UpdateTitleBarColor();
 
-            var (connected, error) = await ConnectSessionAsync(tab, activeConfig, removeTabOnFailure: true);
-            
-            if (connected)
+        _ = ConnectSessionAsync(tab, activeConfig, removeTabOnFailure: true)
+            .ContinueWith(t =>
             {
-                StatusTextBlock.Text = $"Connected to {activeConfig.Name}";
-            }
-            else
-            {
-                StatusTextBlock.Text = "Connection failed";
-                var errorMessage = string.IsNullOrEmpty(error) 
-                    ? $"Failed to connect to {activeConfig.Name}" 
-                    : $"Failed to connect to {activeConfig.Name}: {error}";
-                ShowNotification(errorMessage, NotificationType.Error);
-            }
-        }
-        catch (Exception ex)
-        {
-            StatusTextBlock.Text = $"Error: {ex.Message}";
-            ShowNotification($"Failed to connect to {config.Name}: {ex.Message}", NotificationType.Error);
-            MessageBox.Show($"Failed to connect: {ex.Message}", "Connection Error", 
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        }
+                if (t.IsFaulted)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        StatusTextBlock.Text = "Connection error";
+                        var msg = t.Exception?.GetBaseException()?.Message ?? "Unknown error";
+                        ShowNotification($"Failed to connect: {msg}", NotificationType.Error);
+                        MessageBox.Show($"Failed to connect: {msg}", "Connection Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    });
+                    return;
+                }
+                var (connected, error) = t.Result;
+                Dispatcher.Invoke(() =>
+                {
+                    if (connected)
+                        StatusTextBlock.Text = $"Connected to {activeConfig.Name}";
+                    else
+                    {
+                        StatusTextBlock.Text = "Connection failed";
+                        var errorMessage = string.IsNullOrEmpty(error) ? $"Failed to connect to {activeConfig.Name}" : $"Failed to connect to {activeConfig.Name}: {error}";
+                        ShowNotification(errorMessage, NotificationType.Error);
+                    }
+                });
+            }, TaskScheduler.Default);
     }
+
     
     private async Task<(bool connected, string? error)> ConnectSessionAsync(TerminalTabItem tab, SshSessionConfiguration config, bool removeTabOnFailure = false)
     {

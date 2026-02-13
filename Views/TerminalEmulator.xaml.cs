@@ -387,6 +387,9 @@ namespace TabbySSH.Views
         _customBackgroundColor = null;
     }
 
+    private const int DEFAULT_TERMINAL_COLS = 80;
+    private const int DEFAULT_TERMINAL_ROWS = 24;
+
     public void UpdateTerminalSize()
     {
         if (_emulator == null || _charWidth == 0 || _charHeight == 0)
@@ -394,16 +397,27 @@ namespace TabbySSH.Views
             return;
         }
 
-        // Use Math.Floor to round down - we only count complete columns/rows that fit
-        // Subtract 1 to account for any rounding errors or partial columns
+        // When tab is not visible, ActualWidth/ActualHeight can be 0 or very small (control not laid out).
+        // Use default size so we don't send 1x1 to the server; size will be corrected when tab is shown.
         var availableWidth = ActualWidth;
         var availableHeight = ActualHeight;
-        
+
         // Vertical scrollbar is always visible (disabled when not needed) so reserve its width
-        availableWidth -= TerminalScrollBar.ActualWidth;
-        
-        var cols = Math.Max(1, (int)Math.Floor(availableWidth / _charWidth));
-        var rows = Math.Max(1, (int)Math.Floor(availableHeight / _charHeight));
+        if (TerminalScrollBar != null && TerminalScrollBar.ActualWidth > 0)
+            availableWidth -= TerminalScrollBar.ActualWidth;
+
+        int cols;
+        int rows;
+        if (availableWidth < _charWidth * 2 || availableHeight < _charHeight * 2)
+        {
+            cols = DEFAULT_TERMINAL_COLS;
+            rows = DEFAULT_TERMINAL_ROWS;
+        }
+        else
+        {
+            cols = Math.Max(1, (int)Math.Floor(availableWidth / _charWidth));
+            rows = Math.Max(1, (int)Math.Floor(availableHeight / _charHeight));
+        }
         _emulator.SetSize(cols, rows);
         
         Dispatcher.BeginInvoke(new Action(() =>
@@ -537,7 +551,13 @@ namespace TabbySSH.Views
     {
         if (e.NewValue is bool isVisible && isVisible)
         {
-            RenderScreen();
+            // Tab just became visible; defer size update until after layout so ActualWidth/Height are valid.
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+            {
+                UpdateTerminalSize();
+                SendTerminalSizeToServer(force: true);
+                RenderScreen();
+            }));
         }
     }
 
