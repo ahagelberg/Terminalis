@@ -65,6 +65,9 @@ namespace TabbySSH.Views
     private ITerminalConnection? _connection;
     private Typeface? _typeface;
     private GlyphTypeface? _glyphTypeface;
+    private GlyphTypeface? _glyphTypefaceBold;
+    private GlyphTypeface? _glyphTypefaceItalic;
+    private GlyphTypeface? _glyphTypefaceBoldItalic;
     private double _charWidth;
     private double _charHeight;
     private double _fontSize = DEFAULT_FONT_SIZE;
@@ -235,6 +238,10 @@ namespace TabbySSH.Views
             fontFamily = "Consolas";
         _typeface = new Typeface(new FontFamily(fontFamily), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
         _glyphTypeface = _typeface.TryGetGlyphTypeface(out var gt) ? gt : null;
+        var family = new FontFamily(fontFamily);
+        _glyphTypefaceBold = new Typeface(family, FontStyles.Normal, FontWeights.Bold, FontStretches.Normal).TryGetGlyphTypeface(out var gtB) ? gtB : null;
+        _glyphTypefaceItalic = new Typeface(family, FontStyles.Italic, FontWeights.Normal, FontStretches.Normal).TryGetGlyphTypeface(out var gtI) ? gtI : null;
+        _glyphTypefaceBoldItalic = new Typeface(family, FontStyles.Italic, FontWeights.Bold, FontStretches.Normal).TryGetGlyphTypeface(out var gtBI) ? gtBI : null;
         _dpiCached = false;
         var formattedText = new FormattedText("M", System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight, _typeface, fontSize, Brushes.White, VisualTreeHelper.GetDpi(this).PixelsPerDip);
         _charWidth = formattedText.Width;
@@ -242,6 +249,14 @@ namespace TabbySSH.Views
         _charHeightSnapped = _charHeight;
         _charWidthSnapped = _charWidth;
         _fontSize = fontSize;
+    }
+
+    private GlyphTypeface? GetGlyphTypefaceForStyle(bool bold, bool italic)
+    {
+        if (bold && italic) return _glyphTypefaceBoldItalic;
+        if (bold) return _glyphTypefaceBold;
+        if (italic) return _glyphTypefaceItalic;
+        return _glyphTypeface;
     }
 
     private void EnsureSnappedMetrics()
@@ -1250,36 +1265,43 @@ namespace TabbySSH.Views
                     var charBgRect = new Rect(charX, y, _charWidthSnapped + 0.1, _charHeightSnapped);
                     dc.DrawRectangle(charBackground, null, charBgRect);
 
-                    // Create FormattedText for character
-                    var charFormattedText = new FormattedText(
-                        text[i].ToString(),
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        FlowDirection.LeftToRight,
-                        _typeface,
-                        _fontSize,
-                        charForeground,
-                        VisualTreeHelper.GetDpi(this).PixelsPerDip);
-                    
-                    charFormattedText.SetFontWeight(fontWeight);
-                    charFormattedText.SetFontStyle(fontStyle);
-                    
-                    if (underline || doubleUnderline)
+                    var ch = text[i];
+                    var styledGlyph = GetGlyphTypefaceForStyle(bold, italic);
+                    if (styledGlyph != null && styledGlyph.CharacterToGlyphMap.TryGetValue(ch, out var glyphIndex))
                     {
-                        charFormattedText.SetTextDecorations(TextDecorations.Underline);
+                        EnsureDpiCached();
+                        var glyphRun = new GlyphRun(
+                            styledGlyph,
+                            0,
+                            false,
+                            _fontSize,
+                            (float)_cachedDpi,
+                            new[] { glyphIndex },
+                            new Point(charX, y + styledGlyph.Baseline * _fontSize),
+                            new[] { _charWidthSnapped },
+                            null, null, null, null, null, null);
+                        dc.DrawGlyphRun(charForeground, glyphRun);
                     }
-                    
-                    if (overline)
+                    else
                     {
-                        charFormattedText.SetTextDecorations(TextDecorations.OverLine);
+                        var charFormattedText = new FormattedText(
+                            ch.ToString(),
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            FlowDirection.LeftToRight,
+                            _typeface,
+                            _fontSize,
+                            charForeground,
+                            VisualTreeHelper.GetDpi(this).PixelsPerDip);
+                        charFormattedText.SetFontWeight(fontWeight);
+                        charFormattedText.SetFontStyle(fontStyle);
+                        if (underline || doubleUnderline)
+                            charFormattedText.SetTextDecorations(TextDecorations.Underline);
+                        if (overline)
+                            charFormattedText.SetTextDecorations(TextDecorations.OverLine);
+                        if (crossedOut)
+                            charFormattedText.SetTextDecorations(TextDecorations.Strikethrough);
+                        dc.DrawText(charFormattedText, new Point(charX, y));
                     }
-                    
-                    if (crossedOut)
-                    {
-                        charFormattedText.SetTextDecorations(TextDecorations.Strikethrough);
-                    }
-
-                    // Draw character
-                    dc.DrawText(charFormattedText, new Point(charX, y));
 
                     // Draw double underline if needed
                     if (doubleUnderline)
@@ -1400,24 +1422,84 @@ namespace TabbySSH.Views
         }
         else
         {
-            EnsureDpiCached();
-            var formattedText = new FormattedText(
-                text,
-                CultureInfo.CurrentCulture,
-                FlowDirection.LeftToRight,
-                _typeface,
-                _fontSize,
-                foreground,
-                _cachedDpi);
-            formattedText.SetFontWeight(fontWeight);
-            formattedText.SetFontStyle(fontStyle);
-            if (underline || doubleUnderline)
-                formattedText.SetTextDecorations(TextDecorations.Underline);
-            if (overline)
-                formattedText.SetTextDecorations(TextDecorations.OverLine);
-            if (crossedOut)
-                formattedText.SetTextDecorations(TextDecorations.Strikethrough);
-            dc.DrawText(formattedText, new Point(x, y));
+            // Use GlyphRun with fixed advance widths for bold/italic so character width stays constant
+            var styledGlyph = GetGlyphTypefaceForStyle(bold, italic);
+            if (styledGlyph != null)
+            {
+                double currentX = x;
+                int offset = 0;
+                while (offset < text.Length)
+                {
+                    int chunkLen = Math.Min(MAX_GLYPH_RUN_CHARS, text.Length - offset);
+                    var chunk = text.Substring(offset, chunkLen);
+                    var glyphIndices = new ushort[chunkLen];
+                    var advanceWidths = new double[chunkLen];
+                    int glyphCount = 0;
+                    foreach (var ch in chunk)
+                    {
+                        if (styledGlyph.CharacterToGlyphMap.TryGetValue(ch, out var glyphIndex))
+                        {
+                            glyphIndices[glyphCount] = glyphIndex;
+                            advanceWidths[glyphCount] = _charWidthSnapped;
+                            glyphCount++;
+                        }
+                    }
+                    if (glyphCount > 0)
+                    {
+                        EnsureDpiCached();
+                        var glyphRun = new GlyphRun(
+                            styledGlyph,
+                            0,
+                            false,
+                            _fontSize,
+                            (float)_cachedDpi,
+                            glyphIndices,
+                            new Point(currentX, y + styledGlyph.Baseline * _fontSize),
+                            advanceWidths,
+                            null, null, null, null, null, null);
+                        dc.DrawGlyphRun(foreground, glyphRun);
+                    }
+                    currentX += chunkLen * _charWidthSnapped;
+                    offset += chunkLen;
+                }
+                // Draw decorations manually so they align with fixed-width cells
+                if (underline || doubleUnderline)
+                {
+                    var ulRect = new Rect(x, y + _charHeightSnapped - 2, text.Length * _charWidthSnapped, 1);
+                    dc.DrawRectangle(foreground, null, ulRect);
+                }
+                if (overline)
+                {
+                    var olRect = new Rect(x, y, text.Length * _charWidthSnapped, 1);
+                    dc.DrawRectangle(foreground, null, olRect);
+                }
+                if (crossedOut)
+                {
+                    var soRect = new Rect(x, y + _charHeightSnapped / 2.0, text.Length * _charWidthSnapped, 1);
+                    dc.DrawRectangle(foreground, null, soRect);
+                }
+            }
+            else
+            {
+                EnsureDpiCached();
+                var formattedText = new FormattedText(
+                    text,
+                    CultureInfo.CurrentCulture,
+                    FlowDirection.LeftToRight,
+                    _typeface,
+                    _fontSize,
+                    foreground,
+                    _cachedDpi);
+                formattedText.SetFontWeight(fontWeight);
+                formattedText.SetFontStyle(fontStyle);
+                if (underline || doubleUnderline)
+                    formattedText.SetTextDecorations(TextDecorations.Underline);
+                if (overline)
+                    formattedText.SetTextDecorations(TextDecorations.OverLine);
+                if (crossedOut)
+                    formattedText.SetTextDecorations(TextDecorations.Strikethrough);
+                dc.DrawText(formattedText, new Point(x, y));
+            }
         }
 
         // Draw double underline if needed
