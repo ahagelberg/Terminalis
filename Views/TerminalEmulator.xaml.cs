@@ -72,12 +72,23 @@ namespace TabbySSH.Views
     private double _charHeight;
     private double _fontSize = DEFAULT_FONT_SIZE;
     private int _scrollOffset = 0;
+    // --- Selection state ---
+    // Committed selection (after mouse up with sufficient drag): _hasSelection true, start/end cells define range.
+    // While dragging: _isSelecting true; _selectionStart* = mouse-down cell, _selectionEnd* = current cell;
+    // _selectionMouseDownPoint and _selectionEndPoint (pixels) used so we only show/commit selection if drag >= 0.5 char width.
     private bool _isSelecting = false;
     private bool _hasSelection = false;
     private int? _selectionStartRow;
     private int? _selectionStartCol;
     private int? _selectionEndRow;
     private int? _selectionEndCol;
+    private Point? _selectionMouseDownPoint;
+    private Point? _selectionEndPoint;
+    /// <summary>Minimum drag distance (fraction of character width) before selection is shown or committed. 0.5 = half a character.</summary>
+    private const double SELECTION_DRAG_THRESHOLD_FRACTION = 0.5;
+    /// <summary>Set when ClearSelection() is called so the next RenderScreen() redraws all visible lines (selection highlight must disappear).</summary>
+    private bool _selectionClearedRequiresRedraw;
+
     private Rectangle? _lineFlashOverlay;
     private string _lineEnding = "\n";
     private bool _resetScrollOnUserInput = true;
@@ -415,23 +426,25 @@ namespace TabbySSH.Views
         if (TerminalScrollBar != null && TerminalScrollBar.ActualWidth > 0)
             availableWidth -= TerminalScrollBar.ActualWidth;
 
+        // Use snapped metrics so reported size matches what we actually draw (avoids cutting off last column/row)
+        EnsureSnappedMetrics();
         int cols;
         int rows;
-        if (availableWidth < _charWidth * 2 || availableHeight < _charHeight * 2)
+        if (availableWidth < _charWidthSnapped * 2 || availableHeight < _charHeightSnapped * 2)
         {
             cols = DEFAULT_TERMINAL_COLS;
             rows = DEFAULT_TERMINAL_ROWS;
         }
         else
         {
-            cols = Math.Max(1, (int)Math.Floor(availableWidth / _charWidth));
-            rows = Math.Max(1, (int)Math.Floor(availableHeight / _charHeight));
+            cols = Math.Max(1, (int)Math.Floor(availableWidth / _charWidthSnapped));
+            rows = Math.Max(1, (int)Math.Floor(availableHeight / _charHeightSnapped));
         }
         _emulator.SetSize(cols, rows);
         
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            TerminalCanvas.Width = cols * _charWidth;
+            TerminalCanvas.Width = cols * _charWidthSnapped;
             UpdateCanvasHeight();
         }));
     }
@@ -867,8 +880,11 @@ namespace TabbySSH.Views
             _lastViewportOffset = viewportOffset;
         }
 
-        bool selectionActive = _hasSelection || _isSelecting;
-        bool useFullRange = viewportChanged || _renderedLines.Count == 0 || selectionActive;
+        bool selectionActive = HasVisibleSelection();
+        bool forceFullRedraw = _selectionClearedRequiresRedraw;
+        if (forceFullRedraw)
+            _selectionClearedRequiresRedraw = false;
+        bool useFullRange = viewportChanged || _renderedLines.Count == 0 || selectionActive || forceFullRedraw;
         var linesToRender = useFullRange
             ? Enumerable.Range(startLineIndex, endLineIndex - startLineIndex).ToHashSet()
             : (_emulator?.GetDirtyLines() ?? Enumerable.Empty<int>().ToHashSet());
@@ -1031,7 +1047,7 @@ namespace TabbySSH.Views
 
         var cells = line.Cells;
         var viewportWidth = TerminalCanvas.ActualWidth > 0 ? TerminalCanvas.ActualWidth : ActualWidth;
-        int visibleCols = (int)(viewportWidth / _charWidth);
+        int visibleCols = _charWidthSnapped > 0 ? (int)Math.Floor(viewportWidth / _charWidthSnapped) : 0;
         if (visibleCols <= 0)
         {
             return;
@@ -1051,7 +1067,7 @@ namespace TabbySSH.Views
             var cell = cells[col];
             var cellBg = cell.Reverse ? cell.ForegroundColor : cell.BackgroundColor;
             var cellFg = cell.Reverse ? cell.BackgroundColor : cell.ForegroundColor;
-            var bg = (_hasSelection || _isSelecting) && IsCellSelected(lineIndex, col) ? cellFg : cellBg;
+            var bg = IsCellSelected(lineIndex, col) ? cellFg : cellBg;
 
             if (bg != currentBg)
             {
@@ -1153,8 +1169,32 @@ namespace TabbySSH.Views
         }
     }
 
+    /// <summary>Distance in pixels from selection start to current end (0 if either point is missing).</summary>
+    private double GetSelectionDragDistance()
+    {
+        if (!_selectionMouseDownPoint.HasValue || !_selectionEndPoint.HasValue)
+            return 0;
+        var a = _selectionMouseDownPoint.Value;
+        var b = _selectionEndPoint.Value;
+        var dx = b.X - a.X;
+        var dy = b.Y - a.Y;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    /// <summary>True if we should show a selection: either committed (_hasSelection) or dragging with at least half a character width.</summary>
+    private bool HasVisibleSelection()
+    {
+        if (_hasSelection)
+            return true;
+        if (!_isSelecting || _charWidthSnapped <= 0)
+            return false;
+        return GetSelectionDragDistance() >= SELECTION_DRAG_THRESHOLD_FRACTION * _charWidthSnapped;
+    }
+
     private bool IsCellSelected(int lineIndex, int col)
     {
+        if (!HasVisibleSelection())
+            return false;
         if (!_selectionStartRow.HasValue || !_selectionStartCol.HasValue ||
             !_selectionEndRow.HasValue || !_selectionEndCol.HasValue)
         {
@@ -1211,7 +1251,7 @@ namespace TabbySSH.Views
         var fontStyle = italic ? FontStyles.Italic : FontStyles.Normal;
 
         // Check if this text segment crosses selection boundary - only split if necessary
-        if ((_hasSelection || _isSelecting) && text.Length > 1)
+        if (HasVisibleSelection() && text.Length > 1)
         {
             // Check if segment has mixed selection state
             bool firstCharSelected = IsCellSelected(lineIndex, startCol);
@@ -1316,7 +1356,7 @@ namespace TabbySSH.Views
 
         // For single character or no selection, render normally
         bool charIsSelected = false;
-        if ((_hasSelection || _isSelecting) && text.Length == 1)
+        if (HasVisibleSelection() && text.Length == 1)
         {
             charIsSelected = IsCellSelected(lineIndex, startCol);
         }
@@ -1641,56 +1681,52 @@ namespace TabbySSH.Views
 
         if (e.LeftButton == MouseButtonState.Pressed)
         {
+            // If selection exists: copy, clear, and redraw so the selection highlight disappears immediately
+            if (_hasSelection && !_isSelecting)
+            {
+                CopySelectionToClipboard();
+                ClearSelection();
+                RenderScreen();
+            }
+
             var pos = e.GetPosition(TerminalCanvas);
             if (!IsPointOverCanvas(pos) || _charWidth <= 0 || _charHeight <= 0 || GetDisplayLineCount() == 0)
                 return;
 
             Focus();
-                
-                // If there's already a selection and we're clicking, copy it (PuTTY behavior)
-                if (_hasSelection && !_isSelecting)
-                {
-                    CopySelectionToClipboard();
-                    ClearSelection();
-                    _hasSelection = false;
-                }
-                
-                // Calculate cell position (works for both normal and raw mode)
-                var viewportRow = Math.Max(0, (int)(pos.Y / _charHeightSnapped));
-                var lineIndex = GetLineIndexAtViewportRow(viewportRow);
-                var line = GetLineForRender(lineIndex);
-                var maxCol = line != null ? Math.Max(0, line.Cells.Count - 1) : 0;
-                var col = Math.Max(0, Math.Min(maxCol, (int)(pos.X / _charWidthSnapped)));
-                
-                // Handle double-click (word selection) and triple-click (line selection)
-                if (e.ClickCount == 2)
-                {
-                    // Double-click: select word
-                    SelectWordAt(lineIndex, col);
-                    e.Handled = true;
-                    return;
-                }
-                else if (e.ClickCount == 3)
-                {
-                    // Triple-click: select line
-                    SelectLineAt(lineIndex);
-                    e.Handled = true;
-                    return;
-                }
-                
-                // Start new selection
-                _isSelecting = true;
-                _selectionStartRow = lineIndex;
-                _selectionStartCol = col;
-                _selectionEndRow = lineIndex;
-                _selectionEndCol = col;
-                
-                RenderScreen();
-                
-                // Capture mouse and set cursor
-                CaptureMouse();
-                Cursor = Cursors.IBeam;
+
+            var viewportRow = Math.Max(0, (int)(pos.Y / _charHeightSnapped));
+            var lineIndex = GetLineIndexAtViewportRow(viewportRow);
+            var line = GetLineForRender(lineIndex);
+            var maxCol = line != null ? Math.Max(0, line.Cells.Count - 1) : 0;
+            var col = Math.Max(0, Math.Min(maxCol, (int)Math.Round(pos.X / _charWidthSnapped)));
+
+            if (e.ClickCount == 2)
+            {
+                SelectWordAt(lineIndex, col);
                 e.Handled = true;
+                return;
+            }
+            if (e.ClickCount == 3)
+            {
+                SelectLineAt(lineIndex);
+                e.Handled = true;
+                return;
+            }
+
+            // Mark selection start (and end = start); one code path for both "no selection" and "had selection, just cleared"
+            _selectionStartRow = lineIndex;
+            _selectionStartCol = col;
+            _selectionEndRow = lineIndex;
+            _selectionEndCol = col;
+            _selectionMouseDownPoint = pos;
+            _selectionEndPoint = pos;
+            _isSelecting = true;
+
+            CaptureMouse();
+            Cursor = Cursors.IBeam;
+            RenderScreen();
+            e.Handled = true;
         }
         else if (e.RightButton == MouseButtonState.Pressed)
         {
@@ -1721,58 +1757,60 @@ namespace TabbySSH.Views
         if (IsMouseOverScrollBar(e.OriginalSource as DependencyObject))
             return;
 
-        if (_isSelecting && e.LeftButton == MouseButtonState.Pressed && _charWidth > 0 && _charHeight > 0)
+        if (_isSelecting && e.LeftButton == MouseButtonState.Pressed && _charWidthSnapped > 0 && _charHeightSnapped > 0)
         {
             var pos = e.GetPosition(TerminalCanvas);
-            var viewportRow = Math.Max(0, (int)(pos.Y / _charHeight));
+            _selectionEndPoint = pos;
+            var viewportRow = Math.Max(0, (int)(pos.Y / _charHeightSnapped));
             var lineIndex = GetLineIndexAtViewportRow(viewportRow);
             var line = GetLineForRender(lineIndex);
             var maxCol = line != null ? Math.Max(0, line.Cells.Count - 1) : 0;
-            var col = Math.Max(0, Math.Min(maxCol, (int)(pos.X / _charWidth)));
-            
+            var col = Math.Max(0, Math.Min(maxCol, (int)Math.Round(pos.X / _charWidthSnapped)));
             if (_selectionEndRow != lineIndex || _selectionEndCol != col)
             {
                 _selectionEndRow = lineIndex;
                 _selectionEndCol = col;
                 RenderScreen();
             }
-            
             Cursor = Cursors.IBeam;
             e.Handled = true;
         }
         else if (!_isSelecting && !_hasSelection)
         {
-            // Set IBeam cursor when hovering over terminal
             Cursor = Cursors.IBeam;
         }
     }
 
     private void TerminalEmulator_PreviewMouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (e.LeftButton == MouseButtonState.Released && _isSelecting)
+        if (e.LeftButton != MouseButtonState.Released)
+            return;
+
+        if (_isSelecting)
         {
+            var pos = e.GetPosition(TerminalCanvas);
+            _selectionEndPoint = pos;
+            var viewportRow = Math.Max(0, (int)(pos.Y / _charHeightSnapped));
+            var lineIndex = GetLineIndexAtViewportRow(viewportRow);
+            var line = GetLineForRender(lineIndex);
+            var maxCol = line != null ? Math.Max(0, line.Cells.Count - 1) : 0;
+            var col = Math.Max(0, Math.Min(maxCol, (int)Math.Round(pos.X / _charWidthSnapped)));
+            _selectionEndRow = lineIndex;
+            _selectionEndCol = col;
+
+            double threshold = _charWidthSnapped > 0 ? SELECTION_DRAG_THRESHOLD_FRACTION * _charWidthSnapped : 0;
+            if (GetSelectionDragDistance() < threshold)
+            {
+                ClearSelection();
+            }
+            else
+            {
+                _hasSelection = true;
+            }
+
             _isSelecting = false;
             ReleaseMouseCapture();
-            
-            // Check if we actually have a selection (not just a click)
-            if (_selectionStartRow.HasValue && _selectionStartCol.HasValue && 
-                _selectionEndRow.HasValue && _selectionEndCol.HasValue)
-            {
-                var startRow = Math.Min(_selectionStartRow.Value, _selectionEndRow.Value);
-                var endRow = Math.Max(_selectionStartRow.Value, _selectionEndRow.Value);
-                var startCol = Math.Min(_selectionStartCol.Value, _selectionEndCol.Value);
-                var endCol = Math.Max(_selectionStartCol.Value, _selectionEndCol.Value);
-                
-                // Only mark as having selection if there's actual area selected
-                if (endRow > startRow || (endRow == startRow && endCol > startCol))
-                    _hasSelection = true;
-                else
-                {
-                    ClearSelection();
-                    _hasSelection = false;
-                }
-            }
-            
+            RenderScreen();
             e.Handled = true;
         }
     }
@@ -1783,7 +1821,10 @@ namespace TabbySSH.Views
         _selectionStartCol = null;
         _selectionEndRow = null;
         _selectionEndCol = null;
+        _selectionMouseDownPoint = null;
+        _selectionEndPoint = null;
         _hasSelection = false;
+        _selectionClearedRequiresRedraw = true; // next RenderScreen() must redraw all visible lines
     }
 
     private char GetCellCharacter(int lineIndex, int col)
