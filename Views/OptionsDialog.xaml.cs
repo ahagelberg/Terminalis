@@ -1,10 +1,10 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using TabbySSH.Models;
-using TabbySSH.Services;
+using Terminalis.Models;
+using Terminalis.Services;
 
-namespace TabbySSH.Views;
+namespace Terminalis.Views;
 
 public partial class OptionsDialog : Window
 {

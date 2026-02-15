@@ -1,7 +1,7 @@
 using System.Windows;
 using System.Windows.Input;
 
-namespace TabbySSH.Views;
+namespace Terminalis.Views;
 
 public partial class InputDialog : Window
 {

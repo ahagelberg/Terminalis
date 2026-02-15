@@ -1,7 +1,7 @@
 using System.Windows;
-using TabbySSH.Services.Connections;
+using Terminalis.Services.Connections;
 
-namespace TabbySSH.Views;
+namespace Terminalis.Views;
 
 public partial class HostKeyVerificationDialog : Window
 {

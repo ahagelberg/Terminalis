@@ -1,11 +1,11 @@
 using System.IO;
 using Newtonsoft.Json;
 
-namespace TabbySSH.Services;
+namespace Terminalis.Services;
 
 public class ConfigurationManager
 {
-    private const string APP_NAME = "TabbySSH";
+    private const string APP_NAME = "Terminalis";
     private const string SESSIONS_FILE_NAME = "sessions.json";
     private const string SETTINGS_FILE_NAME = "settings.json";
     private const string ACTIVE_SESSIONS_FILE_NAME = "activesessions.json";

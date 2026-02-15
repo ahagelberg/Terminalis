@@ -1,4 +1,4 @@
-namespace TabbySSH.Models;
+namespace Terminalis.Models;
 
 public class Theme
 {

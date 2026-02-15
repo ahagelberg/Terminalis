@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace TabbySSH.Utils;
+namespace Terminalis.Utils;
 
 public class CircularBuffer<T>
 {

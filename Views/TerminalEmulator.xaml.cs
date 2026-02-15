@@ -10,10 +10,10 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
-using TabbySSH.Services.Connections;
-using TabbySSH.Utils;
+using Terminalis.Services.Connections;
+using Terminalis.Utils;
 
-namespace TabbySSH.Views
+namespace Terminalis.Views
 {
     // Helper class to host DrawingVisual in Canvas
     public class VisualHost : FrameworkElement

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 
-namespace TabbySSH.Utils;
+namespace Terminalis.Utils;
 
 public class AnsiParser
 {

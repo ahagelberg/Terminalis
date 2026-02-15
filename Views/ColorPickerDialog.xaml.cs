@@ -7,7 +7,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 
-namespace TabbySSH.Views;
+namespace Terminalis.Views;
 
 public partial class ColorPickerDialog : Window
 {

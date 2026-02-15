@@ -9,10 +9,10 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Markup;
 using Microsoft.Win32;
-using TabbySSH.Models;
-using TabbySSH.Views;
+using Terminalis.Models;
+using Terminalis.Views;
 
-namespace TabbySSH.Views;
+namespace Terminalis.Views;
 
 public class BoolToIntConverter : IValueConverter
 {

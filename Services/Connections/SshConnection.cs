@@ -8,10 +8,10 @@ using System.Text;
 using System.Threading;
 using Renci.SshNet;
 using Renci.SshNet.Common;
-using TabbySSH.Models;
-using TabbySSH.Services;
+using Terminalis.Models;
+using Terminalis.Services;
 
-namespace TabbySSH.Services.Connections;
+namespace Terminalis.Services.Connections;
 
 public delegate HostKeyVerificationResult HostKeyVerificationCallback(string host, int port, string keyAlgorithm, string fingerprint, bool isChanged);
 

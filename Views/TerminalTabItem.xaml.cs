@@ -5,10 +5,10 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Markup;
-using TabbySSH.Models;
-using TabbySSH.Services.Connections;
+using Terminalis.Models;
+using Terminalis.Services.Connections;
 
-namespace TabbySSH.Views;
+namespace Terminalis.Views;
 
 public partial class TerminalTabItem : TabItem
 {

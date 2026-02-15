@@ -1,6 +1,6 @@
 Copyright © 2025 Andreas Hagelberg
 
-TabbySSH is made available under the MIT License.
+Terminalis is made available under the MIT License.
 
 # MIT License
 
@@ -12,4 +12,4 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 
 # Third-Party Software
 
-TabbySSH includes or interacts with third-party software that have their own licenses.
+Terminalis includes or interacts with third-party software that have their own licenses.

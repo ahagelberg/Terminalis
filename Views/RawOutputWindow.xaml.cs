@@ -4,7 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 
-namespace TabbySSH.Views;
+namespace Terminalis.Views;
 
 public partial class RawOutputWindow : Window
 {

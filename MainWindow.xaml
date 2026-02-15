@@ -1,12 +1,12 @@
-<Window x:Class="TabbySSH.MainWindow"
+<Window x:Class="Terminalis.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:TabbySSH"
-        xmlns:views="clr-namespace:TabbySSH.Views"
+        xmlns:local="clr-namespace:Terminalis"
+        xmlns:views="clr-namespace:Terminalis.Views"
         mc:Ignorable="d"
-        Title="TabbySSH" Height="600" Width="900"
+        Title="Terminalis" Height="600" Width="900"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource WindowBackground}">
     <WindowChrome.WindowChrome>
@@ -57,7 +57,7 @@
                            HorizontalAlignment="Center"
                            IsHitTestVisible="False"
                            Foreground="{DynamicResource MenuForeground}">
-                    <Run Text="TabbySSH" FontWeight="SemiBold"/>
+                    <Run Text="Terminalis" FontWeight="SemiBold"/>
                     <Run Text=" " FontWeight="Normal"/>
                     <Run x:Name="VersionRun" Text="" FontWeight="Normal"/>
                 </TextBlock>

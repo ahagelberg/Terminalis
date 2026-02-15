@@ -1,4 +1,4 @@
-<Window x:Class="TabbySSH.Views.ColorPickerDialog"
+<Window x:Class="Terminalis.Views.ColorPickerDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Select Color" Height="500" Width="500"

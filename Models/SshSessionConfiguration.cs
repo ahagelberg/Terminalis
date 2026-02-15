@@ -1,6 +1,6 @@
 using System.Linq;
 
-namespace TabbySSH.Models;
+namespace Terminalis.Models;
 
 public class PortForwardingRule
 {

@@ -1,7 +1,7 @@
-using TabbySSH.Models;
-using TabbySSH.Services;
+using Terminalis.Models;
+using Terminalis.Services;
 
-namespace TabbySSH.Services.Connections;
+namespace Terminalis.Services.Connections;
 
 public static class ConnectionFactory
 {

@@ -2,9 +2,9 @@ using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using Newtonsoft.Json;
-using TabbySSH.Models;
+using Terminalis.Models;
 
-namespace TabbySSH.Services;
+namespace Terminalis.Services;
 
 public class ThemeManager
 {

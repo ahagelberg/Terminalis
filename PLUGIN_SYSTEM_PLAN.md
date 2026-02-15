@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-This document outlines the plan for implementing a comprehensive plugin system for TabbySSH that allows third-party developers to extend functionality through C# plugins. The system will support multiple plugin types including terminal replacements, input/output transformers, and protocol handlers.
+This document outlines the plan for implementing a comprehensive plugin system for Terminalis that allows third-party developers to extend functionality through C# plugins. The system will support multiple plugin types including terminal replacements, input/output transformers, and protocol handlers.
 
 ### Goals
 - Clean, intuitive API for plugin developers
@@ -82,7 +82,7 @@ User → TerminalEmulator → [Protocol Handler Plugin] → Custom Protocol → 
 
 ### 2.3 Plugin Discovery and Loading
 
-- Plugins stored in `{AppData}/TabbySSH/Plugins/` directory
+- Plugins stored in `{AppData}/Terminalis/Plugins/` directory
 - Each plugin is a single DLL file
 - Plugin metadata stored in `plugin.json` (optional, can be embedded in DLL)
 - Plugins loaded on application startup
@@ -97,7 +97,7 @@ User → TerminalEmulator → [Protocol Handler Plugin] → Custom Protocol → 
 
 #### IPlugin (Base Interface)
 ```csharp
-namespace TabbySSH.Plugins;
+namespace Terminalis.Plugins;
 
 public interface IPlugin
 {
@@ -118,7 +118,7 @@ public interface IPlugin
 
 #### IPluginContext
 ```csharp
-namespace TabbySSH.Plugins;
+namespace Terminalis.Plugins;
 
 public interface IPluginContext
 {
@@ -153,7 +153,7 @@ public enum PluginCapabilities
 **Note:** Terminal replacement plugins are configured per-session. When a session is configured to use a terminal replacement plugin, only that session's tab will use the plugin UI instead of the standard `TerminalEmulator`. Other sessions continue to use the standard terminal.
 
 ```csharp
-namespace TabbySSH.Plugins;
+namespace Terminalis.Plugins;
 
 public interface ITerminalReplacement : IPlugin
 {
@@ -172,7 +172,7 @@ read_file
 ### 3.3 Input Transformer Plugin
 
 ```csharp
-namespace TabbySSH.Plugins;
+namespace Terminalis.Plugins;
 
 public interface IInputTransformer : IPlugin
 {
@@ -185,7 +185,7 @@ public interface IInputTransformer : IPlugin
 ### 3.4 Output Transformer Plugin
 
 ```csharp
-namespace TabbySSH.Plugins;
+namespace Terminalis.Plugins;
 
 public interface IOutputTransformer : IPlugin
 {
@@ -198,7 +198,7 @@ public interface IOutputTransformer : IPlugin
 ### 3.5 Protocol Handler Plugin
 
 ```csharp
-namespace TabbySSH.Plugins;
+namespace Terminalis.Plugins;
 
 public interface IProtocolHandler : IPlugin
 {
@@ -214,7 +214,7 @@ public interface IProtocolHandler : IPlugin
 **Note:** Most plugins operate on a per-session basis. The `IConfigProvider` interface allows plugins to add configuration sections to the session configuration dialog. Global configuration support exists for future use cases, but the primary focus is on per-session plugin configuration.
 
 ```csharp
-namespace TabbySSH.Plugins;
+namespace Terminalis.Plugins;
 
 public interface IConfigProvider : IPlugin
 {
@@ -244,7 +244,7 @@ public interface ITerminalConnection : IDisposable
 
 #### ILogger
 ```csharp
-namespace TabbySSH.Plugins;
+namespace Terminalis.Plugins;
 
 public interface ILogger
 {
@@ -257,7 +257,7 @@ public interface ILogger
 
 #### IConfigurationManager
 ```csharp
-namespace TabbySSH.Plugins;
+namespace Terminalis.Plugins;
 
 public interface IConfigurationManager
 {
@@ -387,7 +387,7 @@ public interface IConfigurationManager
 8. Create plugin API assembly (separate DLL for plugins to reference)
 
 **Deliverables:**
-- `TabbySSH.Plugins.dll` - Plugin API assembly
+- `Terminalis.Plugins.dll` - Plugin API assembly
 - `PluginManager` class
 - `PluginLoader` class
 - `PluginRegistry` class
@@ -594,7 +594,7 @@ public class MacroPlugin : IPlugin, IInputTransformer
 
 ### 6.6 Plugin API Assembly
 
-Create separate `TabbySSH.Plugins.dll` that contains:
+Create separate `Terminalis.Plugins.dll` that contains:
 - All plugin interfaces
 - Helper classes and utilities
 - Plugin base classes (optional)
@@ -690,9 +690,9 @@ Plugins reference this assembly, not the main application.
 
 ### 9.1 Application Structure
 ```
-TabbySSH/
+Terminalis/
 ├── Plugins/
-│   ├── TabbySSH.Plugins.dll (Plugin API)
+│   ├── Terminalis.Plugins.dll (Plugin API)
 │   └── [Plugin DLLs go here]
 ├── Services/
 │   ├── Plugins/
@@ -718,7 +718,7 @@ Plugins/
 
 ### 9.3 Configuration Files
 ```
-{AppData}/TabbySSH/
+{AppData}/Terminalis/
 ├── sessions.json (includes plugin configs)
 ├── settings.json (includes global plugin configs)
 └── plugins/
@@ -878,5 +878,5 @@ Plugins/
 
 **Document Version:** 1.0  
 **Last Updated:** 2025-01-XX  
-**Author:** TabbySSH Development Team
+**Author:** Terminalis Development Team
 

@@ -8,12 +8,12 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using TabbySSH.Models;
-using TabbySSH.Services;
+using Terminalis.Models;
+using Terminalis.Services;
 using Point = System.Windows.Point;
 using WpfImage = System.Windows.Controls.Image;
 
-namespace TabbySSH.Views;
+namespace Terminalis.Views;
 
 public partial class SessionManagerPanel : UserControl
 {

@@ -2,9 +2,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
-using TabbySSH.Models;
+using Terminalis.Models;
 
-namespace TabbySSH.Services;
+namespace Terminalis.Services;
 
 public class KnownHostsManager
 {

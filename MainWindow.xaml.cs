@@ -8,13 +8,13 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Markup;
-using TabbySSH.Models;
-using TabbySSH.Services;
-using TabbySSH.Services.Connections;
-using TabbySSH.Utils;
-using TabbySSH.Views;
+using Terminalis.Models;
+using Terminalis.Services;
+using Terminalis.Services.Connections;
+using Terminalis.Utils;
+using Terminalis.Views;
 
-namespace TabbySSH;
+namespace Terminalis;
 
 public partial class MainWindow : Window
 {

@@ -1,4 +1,4 @@
-namespace TabbySSH.Services.Connections;
+namespace Terminalis.Services.Connections;
 
 public interface ITerminalConnection : IDisposable
 {

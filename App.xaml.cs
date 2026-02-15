@@ -3,10 +3,10 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
-using TabbySSH.Models;
-using TabbySSH.Services;
+using Terminalis.Models;
+using Terminalis.Services;
 
-namespace TabbySSH;
+namespace Terminalis;
 
 public partial class App : Application
 {

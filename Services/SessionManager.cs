@@ -1,9 +1,9 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using Newtonsoft.Json.Linq;
-using TabbySSH.Models;
+using Terminalis.Models;
 
-namespace TabbySSH.Services;
+namespace Terminalis.Services;
 
 public class SessionManager
 {

@@ -1,4 +1,4 @@
-namespace TabbySSH.Utils;
+namespace Terminalis.Utils;
 
 public class TerminalModes
 {
