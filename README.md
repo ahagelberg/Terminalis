@@ -56,7 +56,7 @@ or large and blurry on one of the displays.
   - Customizable font family and size
   - Light and dark themes
 - **Line Ending Support**: Configurable line endings (Unix LF / Windows CRLF)
-- **Bell Notifications**: Flash, sound, or none
+- **Bell Notifications**: Flash screen, flash line, sound, or none
 - **Scrollback**: Extensive scrollback buffer for terminal history
 
 ### Connection Options
@@ -72,8 +72,7 @@ or large and blurry on one of the displays.
 
 ### User Interface
 - **Modern Theme System**: 
-  - Light theme
-  - Dark theme (similar to VS Code/Cursor)
+  - Light theme and dark themes available by default
   - JSON-based theme configuration
 - **Custom Window Chrome**: Clean, modern title bar with custom controls
 - **Session Organization**: Group sessions into folders for better organization
