@@ -93,6 +93,6 @@ dotnet build
 
 ## License
 
-Copyright © 2025 Andreas Hagelberg
+Copyright © 2026 Andreas Hagelberg
 
 Terminalis is made available under the MIT License.
